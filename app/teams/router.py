@@ -7,13 +7,14 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, resolve_tenant
 from app.core.database import get_async_session
 from app.teams.schemas import (
     MembershipCreate, MembershipRead,
     TeamCreate, TeamRead, TeamUpdate,
 )
 from app.teams.service import TeamService
+from app.tenants.models import Tenant
 from app.users.models import User
 
 router = APIRouter(prefix="/teams", tags=["Teams"])
@@ -35,11 +36,11 @@ async def create_team(
 
 @router.get("/", response_model=list[TeamRead])
 async def list_teams(
-    current_user: User = Depends(get_current_user),
+    tenant: Tenant = Depends(resolve_tenant),
     svc: TeamService = Depends(_get_service),
 ):
-    """List all teams in the tenant."""
-    return await svc.list_teams(current_user.tenant_id)
+    """List all teams in the tenant. Public."""
+    return await svc.list_teams(tenant.id)
 
 
 @router.get("/my", response_model=list[TeamRead])
@@ -54,10 +55,10 @@ async def my_teams(
 @router.get("/{team_id}", response_model=TeamRead)
 async def get_team(
     team_id: uuid.UUID,
-    _=Depends(get_current_user),
+    _: Tenant = Depends(resolve_tenant),
     svc: TeamService = Depends(_get_service),
 ):
-    """Get team details."""
+    """Get team details. Public."""
     return await svc.get_team(team_id)
 
 
@@ -75,10 +76,10 @@ async def add_member(
 @router.get("/{team_id}/members", response_model=list[MembershipRead])
 async def list_members(
     team_id: uuid.UUID,
-    _=Depends(get_current_user),
+    _: Tenant = Depends(resolve_tenant),
     svc: TeamService = Depends(_get_service),
 ):
-    """List team members."""
+    """List team members. Public."""
     return await svc.list_members(team_id)
 
 

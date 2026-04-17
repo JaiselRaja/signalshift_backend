@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,7 +25,7 @@ class User(Base, UUIDMixin, TimestampMixin):
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="player")
     preferences: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_login_at: Mapped[datetime | None] = mapped_column()
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="users")

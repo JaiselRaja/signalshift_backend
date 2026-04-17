@@ -26,6 +26,7 @@ import app.bookings.models  # noqa: F401
 import app.teams.models  # noqa: F401
 import app.tournaments.models  # noqa: F401
 import app.payments.models  # noqa: F401
+import app.coupons.models  # noqa: F401
 
 # Alembic Config object
 config = context.config

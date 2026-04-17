@@ -9,6 +9,7 @@ import hmac
 import logging
 import uuid
 
+import razorpay
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,22 @@ from app.payments.schemas import PaymentCallbackData, PaymentInitiate, PaymentRe
 from app.users.models import User
 
 logger = logging.getLogger(__name__)
+
+# Razorpay client (initialized once at module level)
+_razorpay_client: razorpay.Client | None = None
+
+
+def _get_razorpay_client() -> razorpay.Client | None:
+    """Lazy-init Razorpay client. Returns None if credentials are not configured."""
+    global _razorpay_client
+    if _razorpay_client is not None:
+        return _razorpay_client
+    if settings.razorpay_key_id and settings.razorpay_key_secret:
+        _razorpay_client = razorpay.Client(
+            auth=(settings.razorpay_key_id, settings.razorpay_key_secret)
+        )
+        return _razorpay_client
+    return None
 
 
 class PaymentService:
@@ -39,8 +56,31 @@ class PaymentService:
         if booking.status != "pending":
             raise ValidationError("Can only pay for pending bookings")
 
-        # Create Razorpay order (placeholder for actual API call)
-        gateway_order_id = f"order_{uuid.uuid4().hex[:16]}"
+        # Create Razorpay order via SDK
+        amount_paise = int(float(booking.final_price) * 100)
+        rz_client = _get_razorpay_client()
+
+        if rz_client:
+            try:
+                order = rz_client.order.create({
+                    "amount": amount_paise,
+                    "currency": booking.currency or "INR",
+                    "receipt": f"booking_{booking.id}",
+                    "notes": {
+                        "booking_id": str(booking.id),
+                        "user_id": str(user.id),
+                    },
+                })
+                gateway_order_id = order["id"]
+            except Exception as exc:
+                logger.error("Razorpay order creation failed: %s", exc)
+                raise PaymentError(f"Payment gateway error: {exc}") from exc
+        else:
+            # Development fallback when Razorpay credentials are not configured
+            if not settings.is_development:
+                raise PaymentError("Payment gateway is not configured")
+            gateway_order_id = f"order_dev_{uuid.uuid4().hex[:16]}"
+            logger.warning("DEV MODE: Using fake order ID %s", gateway_order_id)
 
         txn = PaymentTransaction(
             booking_id=booking.id,
@@ -156,6 +196,74 @@ class PaymentService:
                 booking.version += 1
 
             await self.db.commit()
+
+    async def initiate_refund(
+        self, booking_id: uuid.UUID
+    ) -> PaymentRead:
+        """Initiate a refund for a cancelled booking via Razorpay."""
+        # Find the successful payment for this booking
+        result = await self.db.execute(
+            select(PaymentTransaction).where(
+                PaymentTransaction.booking_id == booking_id,
+                PaymentTransaction.status == "success",
+            )
+        )
+        txn = result.scalar_one_or_none()
+        if not txn:
+            raise NotFoundError("Payment", str(booking_id))
+
+        booking = await self.db.get(Booking, booking_id)
+        if not booking or not booking.refund_amount:
+            raise ValidationError("No refund amount computed for this booking")
+
+        refund_amount_paise = int(float(booking.refund_amount) * 100)
+
+        rz_client = _get_razorpay_client()
+        if rz_client and txn.gateway_txn_id:
+            try:
+                refund = rz_client.payment.refund(txn.gateway_txn_id, {
+                    "amount": refund_amount_paise,
+                    "notes": {"booking_id": str(booking_id)},
+                })
+                txn.refund_id = refund.get("id")
+            except Exception as exc:
+                logger.error("Razorpay refund failed: %s", exc)
+                raise PaymentError(f"Refund failed: {exc}") from exc
+        else:
+            if not settings.is_development:
+                raise PaymentError("Cannot process refund: payment gateway not configured")
+            txn.refund_id = f"rfnd_dev_{uuid.uuid4().hex[:12]}"
+            logger.warning("DEV MODE: Using fake refund ID %s", txn.refund_id)
+
+        txn.refund_amount = float(booking.refund_amount)
+        txn.status = "refunded"
+
+        # Transition booking to refunded
+        BookingStateMachine.validate_transition(booking.status, "refund_pending")
+        booking.status = "refund_pending"
+        booking.version += 1
+
+        await self.db.commit()
+        await self.db.refresh(txn)
+
+        # Move to refunded immediately (in production, this would be async via webhook)
+        BookingStateMachine.validate_transition(booking.status, "refunded")
+        booking.status = "refunded"
+        booking.version += 1
+        await self.db.commit()
+
+        await event_bus.emit("payment.refunded", {
+            "txn_id": str(txn.id),
+            "booking_id": str(booking_id),
+            "refund_amount": float(booking.refund_amount),
+        })
+
+        logger.info(
+            "Refund processed: %s for booking %s, amount ₹%.2f",
+            txn.refund_id, booking_id, booking.refund_amount,
+        )
+
+        return PaymentRead.model_validate(txn)
 
     async def _process_failed(self, entity: dict) -> None:
         order_id = entity.get("order_id")

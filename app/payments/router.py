@@ -9,9 +9,12 @@ import logging
 from fastapi import APIRouter, Depends, Request, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from sqlalchemy import select
+
+from app.auth.dependencies import get_current_user, require_roles
 from app.config import settings
 from app.core.database import get_async_session
+from app.payments.models import PaymentTransaction
 from app.payments.schemas import PaymentCallbackData, PaymentInitiate, PaymentRead
 from app.payments.service import PaymentService
 from app.users.models import User
@@ -23,6 +26,20 @@ router = APIRouter(prefix="/payments", tags=["Payments"])
 
 def _get_service(db: AsyncSession = Depends(get_async_session)) -> PaymentService:
     return PaymentService(db)
+
+
+@router.get("/", response_model=list[PaymentRead])
+async def list_payments(
+    current_user: User = Depends(require_roles("super_admin", "turf_admin")),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """List all payment transactions. Admin only."""
+    result = await db.execute(
+        select(PaymentTransaction)
+        .order_by(PaymentTransaction.created_at.desc())
+        .limit(100)
+    )
+    return [PaymentRead.model_validate(t) for t in result.scalars().all()]
 
 
 @router.post("/initiate", response_model=PaymentRead, status_code=201)
@@ -42,6 +59,19 @@ async def payment_callback(
 ):
     """Handle Razorpay client-side callback (signature verified)."""
     return await svc.handle_callback(body)
+
+
+@router.post("/refund/{booking_id}", response_model=PaymentRead)
+async def refund_payment(
+    booking_id: str,
+    current_user: User = Depends(get_current_user),
+    svc: PaymentService = Depends(_get_service),
+):
+    """Initiate a refund for a cancelled booking. Admin only."""
+    import uuid as _uuid
+    if current_user.role not in ("super_admin", "turf_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return await svc.initiate_refund(_uuid.UUID(booking_id))
 
 
 @router.post("/webhook", status_code=200)

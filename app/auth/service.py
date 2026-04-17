@@ -171,6 +171,62 @@ class AuthService:
         return tenant
 
     async def _send_otp_email(self, email: str, otp: str) -> None:
-        """Send OTP via SMTP. Placeholder for real email service."""
-        # TODO: Integrate with email provider (SES, SendGrid, etc.)
-        logger.info("Sending OTP email to %s", email)
+        """Send OTP via SMTP using the emails library."""
+        import emails
+        from emails.template import JinjaTemplate
+
+        if not settings.smtp_user or not settings.smtp_password:
+            logger.warning("SMTP not configured — OTP for %s: %s", email, otp)
+            return
+
+        html_body = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+            <div style="text-align: center; margin-bottom: 32px;">
+                <h1 style="color: #6366f1; font-size: 20px; margin: 0;">SIGNAL SHIFT</h1>
+                <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 0;">Book &middot; Play &middot; Win</p>
+            </div>
+            <div style="background: #1e1e2e; border-radius: 12px; padding: 32px; text-align: center;">
+                <p style="color: #cbd5e1; font-size: 14px; margin: 0 0 20px;">
+                    Your one-time verification code is:
+                </p>
+                <div style="background: #0f0f1a; border-radius: 8px; padding: 16px; margin: 0 auto;
+                            display: inline-block; letter-spacing: 8px;">
+                    <span style="color: #ffffff; font-size: 32px; font-weight: 700; font-family: monospace;">
+                        {otp}
+                    </span>
+                </div>
+                <p style="color: #64748b; font-size: 12px; margin: 20px 0 0;">
+                    This code expires in {settings.otp_expire_seconds // 60} minutes.<br>
+                    If you didn&rsquo;t request this, you can safely ignore this email.
+                </p>
+            </div>
+        </div>
+        """
+
+        msg = emails.Message(
+            subject=f"Your Signal Shift verification code: {otp}",
+            html=JinjaTemplate(html_body),
+            mail_from=(settings.smtp_from_name, settings.smtp_user),
+        )
+
+        try:
+            response = msg.send(
+                to=email,
+                smtp={
+                    "host": settings.smtp_host,
+                    "port": settings.smtp_port,
+                    "tls": True,
+                    "user": settings.smtp_user,
+                    "password": settings.smtp_password,
+                },
+            )
+            if response.status_code not in (250, 251):
+                logger.error(
+                    "OTP email to %s failed with status %s: %s",
+                    email, response.status_code, response.error,
+                )
+            else:
+                logger.info("OTP email sent to %s", email)
+        except Exception as exc:
+            logger.error("Failed to send OTP email to %s: %s", email, exc)

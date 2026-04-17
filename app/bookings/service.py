@@ -30,6 +30,7 @@ from app.core.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from app.coupons.service import CouponService
 from app.turfs.models import TurfSlotRule
 from app.users.models import User
 
@@ -41,6 +42,7 @@ class BookingService:
         self.db = db
         self.conflict_checker = ConflictChecker()
         self.pricing = PricingPipeline(db)
+        self.coupon_service = CouponService(db)
 
     async def create_booking(
         self, user: User, body: BookingCreate
@@ -76,6 +78,21 @@ class BookingService:
                 body.turf_id, body.booking_date, body.start_time
             )
 
+            # STEP 3.5: Validate coupon if provided
+            coupon_discount = Decimal("0")
+            if body.coupon_code:
+                try:
+                    coupon_discount = await self.coupon_service.validate_and_compute_discount(
+                        tenant_id=user.tenant_id,
+                        coupon_code=body.coupon_code,
+                        booking_amount=base_price,
+                        turf_id=body.turf_id,
+                        booking_type=body.booking_type,
+                    )
+                except Exception:
+                    # Coupon validation failure should not block booking
+                    coupon_discount = Decimal("0")
+
             # STEP 4: Compute full price
             price = await self.pricing.compute_full(
                 turf_id=body.turf_id,
@@ -84,6 +101,7 @@ class BookingService:
                 end_time=body.end_time,
                 booking_type=body.booking_type,
                 base_price=base_price,
+                coupon_discount=coupon_discount,
             )
 
             # STEP 5: Insert booking
@@ -110,6 +128,11 @@ class BookingService:
         # Refresh to get DB-generated fields
         await self.db.refresh(booking)
 
+        # Increment coupon usage if one was applied
+        if body.coupon_code and coupon_discount > 0:
+            await self.coupon_service.increment_usage(user.tenant_id, body.coupon_code)
+            await self.db.commit()
+
         # Post-commit: emit event
         await event_bus.emit("booking.created", {
             "booking_id": str(booking.id),
@@ -133,6 +156,20 @@ class BookingService:
         base_price = await self._resolve_base_price(
             body.turf_id, body.booking_date, body.start_time
         )
+
+        coupon_discount = Decimal("0")
+        if body.coupon_code:
+            try:
+                coupon_discount = await self.coupon_service.validate_and_compute_discount(
+                    tenant_id=user.tenant_id,
+                    coupon_code=body.coupon_code,
+                    booking_amount=base_price,
+                    turf_id=body.turf_id,
+                    booking_type=body.booking_type,
+                )
+            except Exception:
+                coupon_discount = Decimal("0")
+
         return await self.pricing.compute_full(
             turf_id=body.turf_id,
             booking_date=body.booking_date,
@@ -140,6 +177,7 @@ class BookingService:
             end_time=body.end_time,
             booking_type=body.booking_type,
             base_price=base_price,
+            coupon_discount=coupon_discount,
         )
 
     async def cancel_booking(

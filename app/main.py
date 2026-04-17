@@ -10,13 +10,16 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.database import get_async_session
 from app.core.exceptions import AppError
-from app.core.middleware import RequestIDMiddleware, TenantMiddleware, TimingMiddleware
+from app.core.middleware import RateLimitMiddleware, RequestIDMiddleware, TenantMiddleware, TimingMiddleware
 
 # ─── Import routers ─────────────────────────────────
 from app.auth.router import router as auth_router
@@ -27,6 +30,7 @@ from app.bookings.router import router as bookings_router
 from app.teams.router import router as teams_router
 from app.tournaments.router import router as tournaments_router
 from app.payments.router import router as payments_router
+from app.coupons.router import router as coupons_router
 
 # ─── Logging ─────────────────────────────────────────
 logging.basicConfig(
@@ -52,6 +56,11 @@ async def lifespan(app: FastAPI):
     import app.teams.models  # noqa: F401
     import app.tournaments.models  # noqa: F401
     import app.payments.models  # noqa: F401
+    import app.coupons.models  # noqa: F401
+
+    # Register event bus handlers
+    from app.core.event_handlers import register_all_handlers
+    register_all_handlers()
 
     yield
 
@@ -80,6 +89,7 @@ app.add_middleware(
 )
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(TimingMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(TenantMiddleware)
 
 
@@ -100,12 +110,42 @@ async def app_error_handler(request: Request, exc: AppError):
 # ─── Health Check ────────────────────────────────────
 
 @app.get("/health", tags=["Health"])
-async def health_check():
-    return {
-        "status": "healthy",
-        "service": settings.app_name,
-        "environment": settings.app_env,
-    }
+async def health_check(
+    db: AsyncSession = Depends(get_async_session),
+):
+    checks: dict[str, str] = {}
+    healthy = True
+
+    # Database check
+    try:
+        await db.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as exc:
+        checks["database"] = f"error: {exc}"
+        healthy = False
+
+    # Redis check
+    try:
+        import redis.asyncio as aioredis
+        from app.core.redis import redis_pool
+        r = aioredis.Redis(connection_pool=redis_pool)
+        await r.ping()
+        checks["redis"] = "ok"
+        await r.aclose()
+    except Exception as exc:
+        checks["redis"] = f"error: {exc}"
+        healthy = False
+
+    status_code = 200 if healthy else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "healthy" if healthy else "degraded",
+            "service": settings.app_name,
+            "environment": settings.app_env,
+            "checks": checks,
+        },
+    )
 
 
 # ─── Mount Routers ──────────────────────────────────
@@ -120,3 +160,4 @@ app.include_router(bookings_router, prefix=API_PREFIX)
 app.include_router(teams_router, prefix=API_PREFIX)
 app.include_router(tournaments_router, prefix=API_PREFIX)
 app.include_router(payments_router, prefix=API_PREFIX)
+app.include_router(coupons_router, prefix=API_PREFIX)

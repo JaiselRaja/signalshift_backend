@@ -7,9 +7,10 @@ import uuid
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user, require_roles
+from app.auth.dependencies import get_current_user, require_roles, resolve_tenant
 from app.core.database import get_async_session
 from app.shared.types import UserRole
+from app.tenants.models import Tenant
 from app.tournaments.schemas import (
     MatchCreate, MatchRead, MatchResultUpdate,
     QualificationResult, RegistrationRead,
@@ -41,20 +42,20 @@ async def create_tournament(
 @router.get("/", response_model=list[TournamentRead])
 async def list_tournaments(
     tournament_status: str | None = Query(None, alias="status"),
-    current_user: User = Depends(get_current_user),
+    tenant: Tenant = Depends(resolve_tenant),
     svc: TournamentService = Depends(_get_service),
 ):
-    """List tournaments in the tenant."""
-    return await svc.list_tournaments(current_user.tenant_id, tournament_status)
+    """List tournaments in the tenant. Public."""
+    return await svc.list_tournaments(tenant.id, tournament_status)
 
 
 @router.get("/{tournament_id}", response_model=TournamentRead)
 async def get_tournament(
     tournament_id: uuid.UUID,
-    _=Depends(get_current_user),
+    _: Tenant = Depends(resolve_tenant),
     svc: TournamentService = Depends(_get_service),
 ):
-    """Get tournament details with rules."""
+    """Get tournament details with rules. Public."""
     return await svc.get_tournament(tournament_id)
 
 
@@ -133,10 +134,10 @@ async def create_match(
 async def list_matches(
     tournament_id: uuid.UUID,
     round_name: str | None = Query(None),
-    _=Depends(get_current_user),
+    _: Tenant = Depends(resolve_tenant),
     svc: TournamentService = Depends(_get_service),
 ):
-    """List matches, optionally filtered by round."""
+    """List matches, optionally filtered by round. Public."""
     return await svc.list_matches(tournament_id, round_name)
 
 
@@ -157,10 +158,10 @@ async def update_match_result(
 async def get_standings(
     tournament_id: uuid.UUID,
     group_name: str | None = Query(None),
-    _=Depends(get_current_user),
+    _: Tenant = Depends(resolve_tenant),
     svc: TournamentService = Depends(_get_service),
 ):
-    """Compute live standings. Auth: any authenticated user."""
+    """Compute live standings. Public."""
     return await svc.compute_standings(tournament_id, group_name)
 
 
