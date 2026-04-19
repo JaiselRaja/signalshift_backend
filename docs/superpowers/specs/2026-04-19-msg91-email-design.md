@@ -11,8 +11,13 @@ Replace the current SMTP-based OTP email sender with a general-purpose `EmailCli
 ## Non-goals
 
 - Swapping email providers pluggably (no `Protocol`/interface layer) — YAGNI; if a second provider is ever needed, the class can be extracted then.
-- MSG91-hosted templates — we keep inline HTML bodies in Python.
 - Rate-limiting or retrying MSG91 calls — transient failures surface as 502 and the user retries.
+
+## Revision 2026-04-19: pivoting from inline HTML to MSG91 templates
+
+Verification during implementation found that MSG91's `/api/v5/email/send` endpoint is template-only — all public examples and MSG91's own help articles use `template_id` + variables; no reliable evidence exists for an inline-HTML field on v5. Sending inline HTML would rely on undocumented behaviour.
+
+Pivot: a single OTP template is created once in the MSG91 dashboard with a `{{otp}}` variable slot. Its ID is configured via `MSG91_OTP_TEMPLATE_ID`. The `EmailClient` API shifts from `send(to, subject, html)` to `send(to_email, to_name, template_id, variables)`. The OTP HTML body that previously lived in `_send_otp_email` is deleted; rendering happens inside MSG91. Everything else in the design — DI wiring, `ExternalServiceError`, failure handling, 10s timeout, no dev bypass — is unchanged.
 
 ## Architecture
 

@@ -49,6 +49,9 @@ class BookingRead(BaseModel):
     cancel_reason: str | None
     refund_amount: Decimal | None
     notes: str | None
+    user_name: str | None = None
+    user_email: str | None = None
+    user_phone: str | None = None
     created_at: datetime
     updated_at: datetime
 

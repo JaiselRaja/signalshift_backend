@@ -15,7 +15,14 @@ from app.auth.dependencies import get_current_user, require_roles
 from app.config import settings
 from app.core.database import get_async_session
 from app.payments.models import PaymentTransaction
-from app.payments.schemas import PaymentCallbackData, PaymentInitiate, PaymentRead
+from app.payments.schemas import (
+    PaymentCallbackData,
+    PaymentInitiate,
+    PaymentRead,
+    PaymentRejectRequest,
+    UpiInitiateResponse,
+    UpiSubmitUtr,
+)
 from app.payments.service import PaymentService
 from app.users.models import User
 
@@ -59,6 +66,49 @@ async def payment_callback(
 ):
     """Handle Razorpay client-side callback (signature verified)."""
     return await svc.handle_callback(body)
+
+
+@router.post("/upi/initiate", response_model=UpiInitiateResponse, status_code=201)
+async def upi_initiate(
+    body: PaymentInitiate,
+    current_user: User = Depends(get_current_user),
+    svc: PaymentService = Depends(_get_service),
+):
+    """Start a manual UPI payment. Returns a UPI deep-link URI for QR rendering."""
+    return await svc.initiate_upi_payment(current_user, body)
+
+
+@router.post("/upi/submit-utr", response_model=PaymentRead)
+async def upi_submit_utr(
+    body: UpiSubmitUtr,
+    current_user: User = Depends(get_current_user),
+    svc: PaymentService = Depends(_get_service),
+):
+    """User submits the 12-digit UTR after paying via UPI. Moves to 'processing'."""
+    return await svc.submit_utr(current_user, body)
+
+
+@router.post("/{payment_id}/verify", response_model=PaymentRead)
+async def verify_payment(
+    payment_id: str,
+    current_user: User = Depends(require_roles("super_admin", "turf_admin")),
+    svc: PaymentService = Depends(_get_service),
+):
+    """Admin: mark a UPI payment as verified and auto-confirm the booking."""
+    import uuid as _uuid
+    return await svc.verify_upi_payment(_uuid.UUID(payment_id), current_user)
+
+
+@router.post("/{payment_id}/reject", response_model=PaymentRead)
+async def reject_payment(
+    payment_id: str,
+    body: PaymentRejectRequest,
+    current_user: User = Depends(require_roles("super_admin", "turf_admin")),
+    svc: PaymentService = Depends(_get_service),
+):
+    """Admin: reject a UPI payment with a reason."""
+    import uuid as _uuid
+    return await svc.reject_upi_payment(_uuid.UUID(payment_id), current_user, body.reason)
 
 
 @router.post("/refund/{booking_id}", response_model=PaymentRead)

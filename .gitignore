@@ -1,5 +1,6 @@
 # Python
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -8,6 +9,10 @@ __pycache__/
 dist/
 build/
 .eggs/
+
+# Editor swap files
+*.swp
+*.swo
 
 # Environment — never commit secrets
 .env

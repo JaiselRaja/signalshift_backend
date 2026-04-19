@@ -7,7 +7,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import urllib.parse
 import uuid
+from datetime import datetime, timezone
 
 import razorpay
 from sqlalchemy import select
@@ -19,7 +21,13 @@ from app.config import settings
 from app.core.event_bus import event_bus
 from app.core.exceptions import NotFoundError, PaymentError, ValidationError
 from app.payments.models import PaymentTransaction
-from app.payments.schemas import PaymentCallbackData, PaymentInitiate, PaymentRead
+from app.payments.schemas import (
+    PaymentCallbackData,
+    PaymentInitiate,
+    PaymentRead,
+    UpiInitiateResponse,
+    UpiSubmitUtr,
+)
 from app.users.models import User
 
 logger = logging.getLogger(__name__)
@@ -280,3 +288,149 @@ class PaymentService:
             txn.status = "failed"
             txn.gateway_response = entity
             await self.db.commit()
+
+    # ─── UPI (manual verification) ──────────────────────
+
+    async def initiate_upi_payment(
+        self, user: User, data: PaymentInitiate
+    ) -> UpiInitiateResponse:
+        """
+        Create a pending UPI payment and return the deep-link URI and
+        amount for the client to render a QR + open-in-app button.
+        """
+        if not settings.upi_vpa:
+            raise PaymentError("UPI payments are not configured on this server.")
+
+        booking = await self.db.get(Booking, data.booking_id)
+        if not booking:
+            raise NotFoundError("Booking", str(data.booking_id))
+
+        if booking.user_id != user.id:
+            raise ValidationError("You can only pay for your own bookings.")
+
+        if booking.status != "pending":
+            raise ValidationError("Can only pay for pending bookings.")
+
+        # Reuse any existing initiated txn rather than creating duplicates
+        existing = await self.db.execute(
+            select(PaymentTransaction).where(
+                PaymentTransaction.booking_id == booking.id,
+                PaymentTransaction.status.in_(("initiated", "processing")),
+            )
+        )
+        txn = existing.scalar_one_or_none()
+
+        amount = float(booking.final_price)
+        if txn is None:
+            txn = PaymentTransaction(
+                booking_id=booking.id,
+                user_id=user.id,
+                gateway="upi_manual",
+                amount=amount,
+                currency=booking.currency or "INR",
+                status="initiated",
+            )
+            self.db.add(txn)
+            await self.db.commit()
+            await self.db.refresh(txn)
+
+        note = f"Booking {str(booking.id)[:8]}"
+        upi_uri = (
+            f"upi://pay?pa={urllib.parse.quote(settings.upi_vpa)}"
+            f"&pn={urllib.parse.quote(settings.upi_payee_name)}"
+            f"&am={amount:.2f}"
+            f"&cu={booking.currency or 'INR'}"
+            f"&tn={urllib.parse.quote(note)}"
+        )
+
+        return UpiInitiateResponse(
+            payment_id=txn.id,
+            booking_id=booking.id,
+            amount=amount,
+            currency=booking.currency or "INR",
+            upi_uri=upi_uri,
+            upi_vpa=settings.upi_vpa,
+            payee_name=settings.upi_payee_name,
+        )
+
+    async def submit_utr(self, user: User, data: UpiSubmitUtr) -> PaymentRead:
+        """User submits the UTR after completing UPI transfer.
+
+        Transitions the payment from 'initiated' → 'processing' (awaiting admin verify).
+        """
+        txn = await self.db.get(PaymentTransaction, data.payment_id)
+        if not txn:
+            raise NotFoundError("Payment", str(data.payment_id))
+
+        if txn.user_id != user.id:
+            raise ValidationError("This payment is not yours.")
+
+        if txn.status not in ("initiated", "processing"):
+            raise ValidationError(
+                f"Payment is already {txn.status} and cannot be updated."
+            )
+
+        txn.utr = data.utr.strip()
+        txn.status = "processing"
+        await self.db.commit()
+        await self.db.refresh(txn)
+
+        logger.info("UPI UTR submitted: txn=%s utr=%s", txn.id, txn.utr)
+        return PaymentRead.model_validate(txn)
+
+    async def verify_upi_payment(
+        self, payment_id: uuid.UUID, admin: User
+    ) -> PaymentRead:
+        """Admin action: mark payment as success and confirm the booking."""
+        txn = await self.db.get(PaymentTransaction, payment_id)
+        if not txn:
+            raise NotFoundError("Payment", str(payment_id))
+
+        if txn.status != "processing":
+            raise ValidationError(
+                f"Payment must be in 'processing' status to verify (currently '{txn.status}')."
+            )
+
+        txn.status = "success"
+        txn.verified_by = admin.id
+        txn.verified_at = datetime.now(timezone.utc)
+
+        booking = await self.db.get(Booking, txn.booking_id)
+        if booking and booking.status == "pending":
+            BookingStateMachine.validate_transition(booking.status, "confirmed")
+            booking.status = "confirmed"
+            booking.version += 1
+
+        await self.db.commit()
+        await self.db.refresh(txn)
+
+        await event_bus.emit("payment.success", {
+            "txn_id": str(txn.id),
+            "booking_id": str(txn.booking_id),
+        })
+
+        logger.info("UPI payment verified: txn=%s by admin=%s", txn.id, admin.id)
+        return PaymentRead.model_validate(txn)
+
+    async def reject_upi_payment(
+        self, payment_id: uuid.UUID, admin: User, reason: str
+    ) -> PaymentRead:
+        """Admin action: mark payment as failed with a rejection reason."""
+        txn = await self.db.get(PaymentTransaction, payment_id)
+        if not txn:
+            raise NotFoundError("Payment", str(payment_id))
+
+        if txn.status not in ("initiated", "processing"):
+            raise ValidationError(
+                f"Payment must be initiated or processing to reject (currently '{txn.status}')."
+            )
+
+        txn.status = "failed"
+        txn.verified_by = admin.id
+        txn.verified_at = datetime.now(timezone.utc)
+        txn.reject_reason = reason.strip()
+        await self.db.commit()
+        await self.db.refresh(txn)
+
+        logger.info("UPI payment rejected: txn=%s by admin=%s reason=%s", txn.id, admin.id, reason)
+        return PaymentRead.model_validate(txn)

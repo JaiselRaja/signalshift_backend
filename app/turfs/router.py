@@ -142,6 +142,16 @@ async def list_overrides(
     return await svc.list_overrides(turf_id)
 
 
+@router.delete("/overrides/{override_id}", status_code=204)
+async def delete_override(
+    override_id: uuid.UUID,
+    _=Depends(require_roles(UserRole.TURF_ADMIN, UserRole.SUPER_ADMIN)),
+    svc: TurfService = Depends(_get_service),
+):
+    """Delete a slot override. Auth: turf_admin or super_admin."""
+    await svc.delete_override(override_id)
+
+
 # ─── Availability ────────────────────────────────────
 
 @router.get("/{turf_id}/availability", response_model=list[AvailableSlot])

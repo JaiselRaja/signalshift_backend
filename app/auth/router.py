@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.schemas import DevLoginRequest, GoogleTokenRequest, OTPRequest, OTPVerify, RefreshRequest, TokenPair
 from app.auth.service import AuthService
 from app.core.database import get_async_session
+from app.core.email import EmailClient, get_email_client
 from app.core.redis import RedisCache, get_redis
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -17,8 +18,9 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 def _get_service(
     db: AsyncSession = Depends(get_async_session),
     redis_client: aioredis.Redis = Depends(get_redis),
+    email_client: EmailClient = Depends(get_email_client),
 ) -> AuthService:
-    return AuthService(db, RedisCache(redis_client))
+    return AuthService(db, RedisCache(redis_client), email_client)
 
 
 @router.post("/otp/send", status_code=202)

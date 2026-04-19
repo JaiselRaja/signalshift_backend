@@ -34,5 +34,28 @@ class PaymentRead(BaseModel):
     payment_method: str | None
     refund_id: str | None
     refund_amount: Decimal | None
+    utr: str | None = None
+    verified_by: uuid.UUID | None = None
+    verified_at: datetime | None = None
+    reject_reason: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class UpiInitiateResponse(BaseModel):
+    payment_id: uuid.UUID
+    booking_id: uuid.UUID
+    amount: Decimal
+    currency: str
+    upi_uri: str
+    upi_vpa: str
+    payee_name: str
+
+
+class UpiSubmitUtr(BaseModel):
+    payment_id: uuid.UUID
+    utr: str = Field(..., min_length=8, max_length=32)
+
+
+class PaymentRejectRequest(BaseModel):
+    reason: str = Field(..., min_length=2, max_length=500)

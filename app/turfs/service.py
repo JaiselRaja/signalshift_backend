@@ -137,3 +137,10 @@ class TurfService:
             .order_by(SlotOverride.override_date)
         )
         return [SlotOverrideRead.model_validate(o) for o in result.scalars().all()]
+
+    async def delete_override(self, override_id: uuid.UUID) -> None:
+        override = await self.db.get(SlotOverride, override_id)
+        if not override:
+            raise NotFoundError("SlotOverride", str(override_id))
+        await self.db.delete(override)
+        await self.db.commit()

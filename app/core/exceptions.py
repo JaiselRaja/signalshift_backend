@@ -82,3 +82,10 @@ class PaymentError(AppError):
 
     def __init__(self, message: str, detail: dict | None = None):
         super().__init__(message, status_code=402, detail=detail)
+
+
+class ExternalServiceError(AppError):
+    """A third-party service call failed."""
+
+    def __init__(self, message: str, detail: dict | None = None):
+        super().__init__(message, status_code=502, detail=detail)

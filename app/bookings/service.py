@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from sqlalchemy import select, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.bookings.conflict_checker import ConflictChecker
 from app.bookings.models import Booking, CancellationPolicy
@@ -51,81 +52,86 @@ class BookingService:
         Create a booking with atomic conflict prevention.
         Uses pg_advisory_xact_lock scoped to turf + date.
         """
-        async with self.db.begin():
-            # STEP 1: Acquire advisory lock
-            lock_key = _compute_lock_key(body.turf_id, body.booking_date)
-            await self.db.execute(
-                text("SELECT pg_advisory_xact_lock(:key)"),
-                {"key": lock_key},
+        # STEP 0: Require a contact phone on the user profile
+        if not user.phone or not user.phone.strip():
+            raise ValidationError(
+                "Please add your phone number to your profile before booking.",
+                detail={"missing_field": "phone"},
             )
 
-            # STEP 2: Check for conflicts
-            conflict = await self.conflict_checker.find_conflict(
-                db=self.db,
-                turf_id=body.turf_id,
-                booking_date=body.booking_date,
-                start_time=body.start_time,
-                end_time=body.end_time,
+        # STEP 1: Acquire advisory lock (auto-released at transaction end)
+        lock_key = _compute_lock_key(body.turf_id, body.booking_date)
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": lock_key},
+        )
+
+        # STEP 2: Check for conflicts
+        conflict = await self.conflict_checker.find_conflict(
+            db=self.db,
+            turf_id=body.turf_id,
+            booking_date=body.booking_date,
+            start_time=body.start_time,
+            end_time=body.end_time,
+        )
+        if conflict:
+            raise BookingConflictError(
+                f"Slot {body.start_time}–{body.end_time} on "
+                f"{body.booking_date} is already booked"
             )
-            if conflict:
-                raise BookingConflictError(
-                    f"Slot {body.start_time}–{body.end_time} on "
-                    f"{body.booking_date} is already booked"
+
+        # STEP 3: Get base price from slot rules
+        base_price = await self._resolve_base_price(
+            body.turf_id, body.booking_date, body.start_time
+        )
+
+        # STEP 3.5: Validate coupon if provided
+        coupon_discount = Decimal("0")
+        if body.coupon_code:
+            try:
+                coupon_discount = await self.coupon_service.validate_and_compute_discount(
+                    tenant_id=user.tenant_id,
+                    coupon_code=body.coupon_code,
+                    booking_amount=base_price,
+                    turf_id=body.turf_id,
+                    booking_type=body.booking_type,
                 )
+            except Exception:
+                # Coupon validation failure should not block booking
+                coupon_discount = Decimal("0")
 
-            # STEP 3: Get base price from slot rules
-            base_price = await self._resolve_base_price(
-                body.turf_id, body.booking_date, body.start_time
-            )
+        # STEP 4: Compute full price
+        price = await self.pricing.compute_full(
+            turf_id=body.turf_id,
+            booking_date=body.booking_date,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            booking_type=body.booking_type,
+            base_price=base_price,
+            coupon_discount=coupon_discount,
+        )
 
-            # STEP 3.5: Validate coupon if provided
-            coupon_discount = Decimal("0")
-            if body.coupon_code:
-                try:
-                    coupon_discount = await self.coupon_service.validate_and_compute_discount(
-                        tenant_id=user.tenant_id,
-                        coupon_code=body.coupon_code,
-                        booking_amount=base_price,
-                        turf_id=body.turf_id,
-                        booking_type=body.booking_type,
-                    )
-                except Exception:
-                    # Coupon validation failure should not block booking
-                    coupon_discount = Decimal("0")
-
-            # STEP 4: Compute full price
-            price = await self.pricing.compute_full(
-                turf_id=body.turf_id,
-                booking_date=body.booking_date,
-                start_time=body.start_time,
-                end_time=body.end_time,
-                booking_type=body.booking_type,
-                base_price=base_price,
-                coupon_discount=coupon_discount,
-            )
-
-            # STEP 5: Insert booking
-            duration = _calc_duration_mins(body.start_time, body.end_time)
-            booking = Booking(
-                tenant_id=user.tenant_id,
-                turf_id=body.turf_id,
-                user_id=user.id,
-                team_id=body.team_id,
-                booking_date=body.booking_date,
-                start_time=body.start_time,
-                end_time=body.end_time,
-                duration_mins=duration,
-                status="pending",
-                booking_type=body.booking_type,
-                base_price=float(price.base_price),
-                discount_amount=float(price.discount + price.coupon_discount),
-                tax_amount=float(price.tax),
-                final_price=float(price.total),
-                notes=body.notes,
-            )
-            self.db.add(booking)
-
-        # Refresh to get DB-generated fields
+        # STEP 5: Insert booking
+        duration = _calc_duration_mins(body.start_time, body.end_time)
+        booking = Booking(
+            tenant_id=user.tenant_id,
+            turf_id=body.turf_id,
+            user_id=user.id,
+            team_id=body.team_id,
+            booking_date=body.booking_date,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            duration_mins=duration,
+            status="pending",
+            booking_type=body.booking_type,
+            base_price=float(price.base_price),
+            discount_amount=float(price.discount + price.coupon_discount),
+            tax_amount=float(price.tax),
+            final_price=float(price.total),
+            notes=body.notes,
+        )
+        self.db.add(booking)
+        await self.db.commit()
         await self.db.refresh(booking)
 
         # Increment coupon usage if one was applied
@@ -255,14 +261,18 @@ class BookingService:
     async def get_turf_bookings(
         self, turf_id: uuid.UUID, target_date=None
     ) -> list[BookingRead]:
-        """Get bookings for a turf, optionally filtered by date."""
-        query = select(Booking).where(Booking.turf_id == turf_id)
+        """Get bookings for a turf, optionally filtered by date. Includes user contact info."""
+        query = (
+            select(Booking)
+            .where(Booking.turf_id == turf_id)
+            .options(selectinload(Booking.user))
+        )
         if target_date:
             query = query.where(Booking.booking_date == target_date)
         query = query.order_by(Booking.booking_date.desc(), Booking.start_time)
 
         result = await self.db.execute(query)
-        return [BookingRead.model_validate(b) for b in result.scalars().all()]
+        return [_to_booking_read(b) for b in result.scalars().all()]
 
     # ─── Private helpers ─────────────────────────────
 
@@ -354,3 +364,14 @@ def _compute_lock_key(turf_id: uuid.UUID, booking_date) -> int:
 def _calc_duration_mins(start: any, end: any) -> int:
     """Calculate duration in minutes between two time objects."""
     return (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)
+
+
+def _to_booking_read(booking: Booking) -> BookingRead:
+    """Build a BookingRead with the user's contact fields populated."""
+    data = BookingRead.model_validate(booking)
+    user = getattr(booking, "user", None)
+    if user is not None:
+        data.user_name = user.full_name
+        data.user_email = user.email
+        data.user_phone = user.phone
+    return data

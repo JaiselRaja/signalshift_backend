@@ -126,6 +126,16 @@ Layout (single column, stacks on all viewports):
 
 5. **Sticky bottom CTA (mobile ≤ md)** — full-width bar pinned to bottom when at least one slot is selected: `Selected 06:00 – 07:00 · ₹600  [Continue →]`. On desktop this CTA inlines below the slot picker.
 
+### Multi-slot selection (added 2026-04-19)
+
+Users can select **up to 3 consecutive time slots** in a single booking (e.g. tap 6–7 pm then 7–8 pm to book 2 hours). Requirements:
+- Slots must be contiguous (start of slot B == end of slot A).
+- Selecting a non-adjacent slot replaces the prior selection set.
+- When N slots are selected, the combined booking spans `first.start_time` → `last.end_time`, price is the sum of `computed_price`, duration is the sum.
+- UI shows all selected slots highlighted as one continuous run; sticky CTA shows range and total (e.g. `06:00 – 08:00 · ₹1,200 · 2 hrs  [Continue]`).
+- Max 3 (MAX_SLOTS_PER_BOOKING = 3); attempting a 4th shows a subtle toast "Maximum 3 slots per booking".
+- Backend booking create already accepts a single `(start_time, end_time)` — we just pass the merged range. No backend change needed.
+
 Transitions use `transition-all duration-150 ease-out`. Selected state uses `scale-[1.02]` on tap. No heavy animations.
 
 ### Book page (`/book/[turf_id]`)

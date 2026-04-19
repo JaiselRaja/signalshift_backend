@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.schemas import TokenPair
 from app.config import settings
+from app.core.email import EmailClient
 from app.core.exceptions import AuthenticationError, RateLimitError
 from app.core.redis import RedisCache
 from app.core.security import (
@@ -33,13 +34,14 @@ logger = logging.getLogger(__name__)
 
 
 class AuthService:
-    def __init__(self, db: AsyncSession, cache: RedisCache):
+    def __init__(self, db: AsyncSession, cache: RedisCache, email_client: EmailClient):
         self.db = db
         self.cache = cache
+        self.email_client = email_client
         self.user_service = UserService(db)
 
     async def send_otp(self, email: str, tenant_slug: str = "default") -> None:
-        """Generate OTP, store in Redis, send via email."""
+        """Generate OTP, store in Redis, send via MSG91 template."""
         # Rate limit: 3 OTP requests per email per 10 minutes
         allowed = await self.cache.check_rate_limit(
             f"otp_send:{email}", max_attempts=3, window_seconds=600
@@ -50,11 +52,12 @@ class AuthService:
         otp = generate_otp()
         await self.cache.store_otp(email, otp)
 
-        # In development, log OTP instead of sending email
-        if settings.is_development:
-            logger.info("DEV OTP for %s: %s", email, otp)
-        else:
-            await self._send_otp_email(email, otp)
+        await self.email_client.send(
+            to_email=email,
+            to_name=email.split("@", 1)[0],
+            template_id=settings.msg91_otp_template_id,
+            variables={"otp": otp},
+        )
 
     async def verify_otp_and_issue_tokens(
         self, email: str, otp: str, tenant_slug: str = "default"
@@ -170,63 +173,5 @@ class AuthService:
             raise AuthenticationError(f"Tenant '{slug}' not found or inactive")
         return tenant
 
-    async def _send_otp_email(self, email: str, otp: str) -> None:
-        """Send OTP via SMTP using the emails library."""
-        import emails
-        from emails.template import JinjaTemplate
 
-        if not settings.smtp_user or not settings.smtp_password:
-            logger.warning("SMTP not configured — OTP for %s: %s", email, otp)
-            return
 
-        html_body = f"""
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    max-width: 480px; margin: 0 auto; padding: 40px 20px;">
-            <div style="text-align: center; margin-bottom: 32px;">
-                <h1 style="color: #6366f1; font-size: 20px; margin: 0;">SIGNAL SHIFT</h1>
-                <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 0;">Book &middot; Play &middot; Win</p>
-            </div>
-            <div style="background: #1e1e2e; border-radius: 12px; padding: 32px; text-align: center;">
-                <p style="color: #cbd5e1; font-size: 14px; margin: 0 0 20px;">
-                    Your one-time verification code is:
-                </p>
-                <div style="background: #0f0f1a; border-radius: 8px; padding: 16px; margin: 0 auto;
-                            display: inline-block; letter-spacing: 8px;">
-                    <span style="color: #ffffff; font-size: 32px; font-weight: 700; font-family: monospace;">
-                        {otp}
-                    </span>
-                </div>
-                <p style="color: #64748b; font-size: 12px; margin: 20px 0 0;">
-                    This code expires in {settings.otp_expire_seconds // 60} minutes.<br>
-                    If you didn&rsquo;t request this, you can safely ignore this email.
-                </p>
-            </div>
-        </div>
-        """
-
-        msg = emails.Message(
-            subject=f"Your Signal Shift verification code: {otp}",
-            html=JinjaTemplate(html_body),
-            mail_from=(settings.smtp_from_name, settings.smtp_user),
-        )
-
-        try:
-            response = msg.send(
-                to=email,
-                smtp={
-                    "host": settings.smtp_host,
-                    "port": settings.smtp_port,
-                    "tls": True,
-                    "user": settings.smtp_user,
-                    "password": settings.smtp_password,
-                },
-            )
-            if response.status_code not in (250, 251):
-                logger.error(
-                    "OTP email to %s failed with status %s: %s",
-                    email, response.status_code, response.error,
-                )
-            else:
-                logger.info("OTP email sent to %s", email)
-        except Exception as exc:
-            logger.error("Failed to send OTP email to %s: %s", email, exc)

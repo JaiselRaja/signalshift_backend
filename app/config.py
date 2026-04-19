@@ -44,15 +44,19 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
 
+    # ─── UPI (manual verification flow) ───
+    upi_vpa: str = ""
+    upi_payee_name: str = "Signal Shift"
+
     # ─── Google OAuth ───
     google_client_id: str = ""
 
-    # ─── Email ───
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
-    smtp_from_name: str = "Signal Shift"
+    # ─── Email (MSG91) ───
+    msg91_auth_key: str = ""
+    msg91_email_domain: str = "msg.signalshift.in"
+    msg91_from_email: str = "no-reply@msg.signalshift.in"
+    msg91_from_name: str = "Signal Shift"
+    msg91_otp_template_id: str = ""
 
     @property
     def is_development(self) -> bool:
