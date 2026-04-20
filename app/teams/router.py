@@ -62,6 +62,17 @@ async def get_team(
     return await svc.get_team(team_id)
 
 
+@router.patch("/{team_id}", response_model=TeamRead)
+async def update_team(
+    team_id: uuid.UUID,
+    body: TeamUpdate,
+    current_user: User = Depends(get_current_user),
+    svc: TeamService = Depends(_get_service),
+):
+    """Update team (name, logo, active). Manager/captain only."""
+    return await svc.update_team(team_id, current_user.id, body)
+
+
 @router.post("/{team_id}/members", response_model=MembershipRead, status_code=201)
 async def add_member(
     team_id: uuid.UUID,

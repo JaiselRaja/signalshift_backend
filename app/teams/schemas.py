@@ -51,3 +51,6 @@ class MembershipRead(BaseModel):
     role: str
     joined_at: datetime
     is_active: bool
+    user_name: str | None = None
+    user_email: str | None = None
+    user_avatar_url: str | None = None

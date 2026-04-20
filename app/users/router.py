@@ -11,7 +11,7 @@ from app.auth.dependencies import get_current_user, require_roles
 from app.core.database import get_async_session
 from app.shared.types import UserRole
 from app.users.models import User
-from app.users.schemas import UserRead, UserUpdate, UserRoleUpdate
+from app.users.schemas import UserRead, UserSummary, UserUpdate, UserRoleUpdate
 from app.users.service import UserService
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -45,6 +45,18 @@ async def list_users(
 ):
     """List users in current tenant. Auth: turf_admin or super_admin."""
     return await svc.list_users(current_user.tenant_id, role)
+
+
+@router.get("/search", response_model=list[UserSummary])
+async def search_users(
+    q: str = Query(..., min_length=2, max_length=120),
+    limit: int = Query(10, ge=1, le=25),
+    current_user: User = Depends(get_current_user),
+    svc: UserService = Depends(_get_service),
+):
+    """Search users in your tenant by name or email (case-insensitive substring).
+    Any authenticated user can use this — needed for team-member typeahead."""
+    return await svc.search_users(current_user.tenant_id, q, limit)
 
 
 @router.get("/{user_id}", response_model=UserRead)

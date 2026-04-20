@@ -53,3 +53,14 @@ class UserMinimal(BaseModel):
     full_name: str
     email: str
     role: str
+
+
+class UserSummary(BaseModel):
+    """Result shape for /users/search typeahead."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    full_name: str | None = None
+    avatar_url: str | None = None
+    role: str

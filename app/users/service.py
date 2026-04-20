@@ -5,12 +5,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.users.models import User
-from app.users.schemas import UserCreate, UserRead, UserUpdate, UserRoleUpdate
+from app.users.schemas import UserCreate, UserRead, UserSummary, UserUpdate, UserRoleUpdate
 
 
 class UserService:
@@ -110,3 +110,26 @@ class UserService:
 
         result = await self.db.execute(query)
         return [UserRead.model_validate(u) for u in result.scalars().all()]
+
+    async def search_users(
+        self, tenant_id: uuid.UUID, query: str, limit: int = 10
+    ) -> list[UserSummary]:
+        """Case-insensitive substring search on email/full_name scoped to a tenant."""
+        q = (query or "").strip().lower()
+        if len(q) < 2:
+            return []
+        pattern = f"%{q}%"
+        result = await self.db.execute(
+            select(User)
+            .where(and_(
+                User.tenant_id == tenant_id,
+                User.is_active.is_(True),
+                or_(
+                    func.lower(User.email).like(pattern),
+                    func.lower(User.full_name).like(pattern),
+                ),
+            ))
+            .order_by(User.full_name)
+            .limit(limit)
+        )
+        return [UserSummary.model_validate(u) for u in result.scalars().all()]
