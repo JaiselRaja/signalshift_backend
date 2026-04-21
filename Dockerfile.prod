@@ -1,0 +1,31 @@
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /code
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libpq-dev curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python deps
+COPY pyproject.toml ./
+COPY app/__init__.py ./app/__init__.py
+RUN pip install . gunicorn
+
+# App source (alembic, app/, etc.)
+COPY . .
+
+# Run migrations at container start, then launch gunicorn + uvicorn workers
+RUN printf '#!/bin/sh\nset -e\nalembic upgrade head\nexec gunicorn app.main:app --workers ${WEB_CONCURRENCY:-2} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --access-logfile - --error-logfile -\n' > /code/entrypoint.sh \
+  && chmod +x /code/entrypoint.sh
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["/code/entrypoint.sh"]

@@ -1,0 +1,70 @@
+# Production compose for Signal Shift — backend, frontend, admin only.
+# Postgres and Redis are expected to run on the host (installed via apt)
+# and listen on the docker bridge (default: 172.17.0.1).
+#
+# Usage from a server layout like:
+#   /opt/signal-shift/
+#     signalshift_backend/   (this repo — run compose from here)
+#     frontend/
+#     admin/
+#
+#   cd /opt/signal-shift/signalshift_backend
+#   docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: signalshift-api:latest
+    container_name: signalshift-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # DATABASE_URL and REDIS_URL in .env should use host.docker.internal
+      # e.g.
+      #   DATABASE_URL=postgresql+asyncpg://signal:shift@host.docker.internal:5432/signalshift
+      #   REDIS_URL=redis://host.docker.internal:6379/0
+      WEB_CONCURRENCY: "2"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8000:8000"   # bind to loopback; expose via reverse proxy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: ${FRONTEND_API_URL:-https://api.signalshift.in/api/v1}
+        NEXT_PUBLIC_TENANT_SLUG: ${TENANT_SLUG:-default}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        NEXT_PUBLIC_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+    image: signalshift-frontend:latest
+    container_name: signalshift-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      - api
+
+  admin:
+    build:
+      context: ../admin
+      dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: ${ADMIN_API_URL:-https://api.signalshift.in/api/v1}
+        NEXT_PUBLIC_TENANT_SLUG: ${TENANT_SLUG:-default}
+    image: signalshift-admin:latest
+    container_name: signalshift-admin
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
