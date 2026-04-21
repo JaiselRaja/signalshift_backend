@@ -84,11 +84,7 @@ class PaymentService:
                 logger.error("Razorpay order creation failed: %s", exc)
                 raise PaymentError(f"Payment gateway error: {exc}") from exc
         else:
-            # Development fallback when Razorpay credentials are not configured
-            if not settings.is_development:
-                raise PaymentError("Payment gateway is not configured")
-            gateway_order_id = f"order_dev_{uuid.uuid4().hex[:16]}"
-            logger.warning("DEV MODE: Using fake order ID %s", gateway_order_id)
+            raise PaymentError("Payment gateway is not configured")
 
         txn = PaymentTransaction(
             booking_id=booking.id,
@@ -172,7 +168,7 @@ class PaymentService:
     def _verify_razorpay_signature(self, data: PaymentCallbackData) -> bool:
         """HMAC-SHA256 signature verification for Razorpay."""
         if not settings.razorpay_key_secret:
-            return settings.is_development  # Allow in development
+            return False
 
         message = f"{data.razorpay_order_id}|{data.razorpay_payment_id}"
         expected_sig = hmac.new(
@@ -238,10 +234,7 @@ class PaymentService:
                 logger.error("Razorpay refund failed: %s", exc)
                 raise PaymentError(f"Refund failed: {exc}") from exc
         else:
-            if not settings.is_development:
-                raise PaymentError("Cannot process refund: payment gateway not configured")
-            txn.refund_id = f"rfnd_dev_{uuid.uuid4().hex[:12]}"
-            logger.warning("DEV MODE: Using fake refund ID %s", txn.refund_id)
+            raise PaymentError("Cannot process refund: payment gateway not configured")
 
         txn.refund_amount = float(booking.refund_amount)
         txn.status = "refunded"

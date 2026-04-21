@@ -6,7 +6,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.schemas import DevLoginRequest, GoogleTokenRequest, OTPRequest, OTPVerify, RefreshRequest, TokenPair
+from app.auth.schemas import GoogleTokenRequest, OTPRequest, OTPVerify, RefreshRequest, TokenPair
 from app.auth.service import AuthService
 from app.core.database import get_async_session
 from app.core.email import EmailClient, get_email_client
@@ -54,15 +54,6 @@ async def verify_otp(
     return await svc.verify_otp_and_issue_tokens(
         body.email, body.otp, body.tenant_slug
     )
-
-
-@router.post("/dev-login", response_model=TokenPair, include_in_schema=False)
-async def dev_login(
-    body: DevLoginRequest,
-    svc: AuthService = Depends(_get_service),
-):
-    """Dev-only bypass: email + any password → instant token pair. Disabled in production."""
-    return await svc.dev_login(body.email, body.tenant_slug)
 
 
 @router.post("/google", response_model=TokenPair)

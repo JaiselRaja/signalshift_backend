@@ -30,9 +30,3 @@ class RefreshRequest(BaseModel):
 class GoogleTokenRequest(BaseModel):
     credential: str = Field(..., description="Google ID token from GIS callback")
     tenant_slug: str = Field(default="default", max_length=100)
-
-
-class DevLoginRequest(BaseModel):
-    email: str = Field(..., max_length=320)
-    password: str = Field(..., min_length=1)  # not checked — dev only
-    tenant_slug: str = Field(default="default", max_length=100)

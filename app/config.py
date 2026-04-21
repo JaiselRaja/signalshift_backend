@@ -58,13 +58,5 @@ class Settings(BaseSettings):
     msg91_from_name: str = "Signal Shift"
     msg91_otp_template_id: str = ""
 
-    @property
-    def is_development(self) -> bool:
-        return self.app_env == "development"
-
-    @property
-    def is_production(self) -> bool:
-        return self.app_env == "production"
-
 
 settings = Settings()

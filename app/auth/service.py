@@ -85,15 +85,6 @@ class AuthService:
 
         return self._create_token_pair(user.id, tenant.id, user.role)
 
-    async def dev_login(self, email: str, tenant_slug: str = "default") -> TokenPair:
-        """Dev-only: get-or-create a user by email and return tokens. No password check."""
-        if not settings.is_development:
-            raise AuthenticationError("Dev login is only available in development mode.")
-        tenant = await self._resolve_tenant(tenant_slug)
-        user = await self.user_service.get_or_create_by_email(tenant.id, email)
-        logger.info("DEV login for %s", email)
-        return self._create_token_pair(user.id, tenant.id, user.role)
-
     async def google_sign_in(self, credential: str, tenant_slug: str = "default") -> TokenPair:
         """Verify a Google ID token and issue Signal Shift JWT tokens."""
         if not settings.google_client_id:
