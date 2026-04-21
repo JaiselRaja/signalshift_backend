@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -69,5 +69,5 @@ class CouponRead(BaseModel):
     applicable_turf_ids: list[UUID]
     applicable_booking_types: list[str]
     is_active: bool
-    created_at: str | None = None
-    updated_at: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
