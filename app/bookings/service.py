@@ -201,9 +201,10 @@ class BookingService:
         # Compute refund
         refund_amount, refund_pct = await self._compute_refund(booking)
 
-        # Apply cancellation
+        # Apply cancellation — cancelled_at column is TIMESTAMP WITHOUT
+        # TIME ZONE; store a naive UTC value to match.
         booking.status = "cancelled"
-        booking.cancelled_at = datetime.now(timezone.utc)
+        booking.cancelled_at = datetime.now(timezone.utc).replace(tzinfo=None)
         booking.cancel_reason = body.reason
         booking.refund_amount = float(refund_amount)
         booking.version += 1
