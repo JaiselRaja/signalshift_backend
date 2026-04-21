@@ -80,9 +80,9 @@ class BookingService:
                 f"{body.booking_date} is already booked"
             )
 
-        # STEP 3: Get base price from slot rules
+        # STEP 3: Get base price summed across the full range
         base_price = await self._resolve_base_price(
-            body.turf_id, body.booking_date, body.start_time
+            body.turf_id, body.booking_date, body.start_time, body.end_time
         )
 
         # STEP 3.5: Validate coupon if provided
@@ -160,7 +160,7 @@ class BookingService:
     ) -> PriceBreakdown:
         """Compute price without creating a booking."""
         base_price = await self._resolve_base_price(
-            body.turf_id, body.booking_date, body.start_time
+            body.turf_id, body.booking_date, body.start_time, body.end_time
         )
 
         coupon_discount = Decimal("0")
@@ -283,9 +283,13 @@ class BookingService:
         return booking
 
     async def _resolve_base_price(
-        self, turf_id: uuid.UUID, booking_date, start_time
+        self, turf_id: uuid.UUID, booking_date, start_time, end_time
     ) -> Decimal:
-        """Find the matching slot rule's base price."""
+        """Find the matching slot rule and return the base price
+        summed across every slot in the [start_time, end_time) range.
+        Assumes the range is covered by a single slot rule (enforced
+        by the frontend picker which only allows consecutive same-rule slots).
+        """
         day_of_week = booking_date.weekday()
         result = await self.db.execute(
             select(TurfSlotRule).where(and_(
@@ -293,15 +297,19 @@ class BookingService:
                 TurfSlotRule.day_of_week == day_of_week,
                 TurfSlotRule.is_active.is_(True),
                 TurfSlotRule.start_time <= start_time,
-                TurfSlotRule.end_time > start_time,
+                TurfSlotRule.end_time >= end_time,
             )).limit(1)
         )
         rule = result.scalar_one_or_none()
         if not rule:
             raise ValidationError(
-                f"No active slot rule found for {booking_date} at {start_time}"
+                f"No active slot rule found for {booking_date} "
+                f"from {start_time} to {end_time}"
             )
-        return Decimal(str(rule.base_price))
+
+        total_minutes = _calc_duration_mins(start_time, end_time)
+        slot_count = max(1, total_minutes // max(rule.duration_mins, 1))
+        return Decimal(str(rule.base_price)) * Decimal(slot_count)
 
     def _authorize_cancel(self, user: User, booking: Booking) -> None:
         """Only booking owner or admins can cancel."""
