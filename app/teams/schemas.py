@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.shared.types import TeamMemberRole
 
@@ -54,3 +54,14 @@ class MembershipRead(BaseModel):
     user_name: str | None = None
     user_email: str | None = None
     user_avatar_url: str | None = None
+
+
+class TeamInvite(BaseModel):
+    email: EmailStr
+    role: TeamMemberRole = TeamMemberRole.PLAYER
+
+
+class TeamInviteResult(BaseModel):
+    status: str  # "added" (existing user) or "invited" (email sent)
+    email: str
+    user_id: uuid.UUID | None = None

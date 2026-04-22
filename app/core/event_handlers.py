@@ -85,49 +85,49 @@ async def log_payment_refunded(payload: dict[str, Any]) -> None:
     )
 
 
-# ─── Notification Stubs ─────────────────────────────────
-# These are placeholders for email/push notification integration.
-# Wire to your notification service (SendGrid, FCM, etc.) when ready.
-
-
-async def notify_booking_confirmed(payload: dict[str, Any]) -> None:
-    """Send booking confirmation notification."""
-    logger.info(
-        "NOTIFY: Booking %s confirmed — notification would be sent here",
-        payload.get("booking_id"),
-    )
-
-
-async def notify_booking_cancelled(payload: dict[str, Any]) -> None:
-    """Send booking cancellation notification."""
-    logger.info(
-        "NOTIFY: Booking %s cancelled — notification would be sent here",
-        payload.get("booking_id"),
-    )
-
-
 # ─── Registration ───────────────────────────────────────
 
 
 def register_all_handlers() -> None:
     """Subscribe all handlers to the global event bus. Call once at startup."""
 
+    # Email notifications live in app.core.notifications (SendGrid-backed).
+    from app.core.notifications import (
+        on_booking_cancelled,
+        on_booking_confirmed,
+        on_booking_created,
+        on_payment_rejected,
+        on_team_invitation,
+        on_team_member_added,
+        on_tournament_registered,
+    )
+
     # Booking events
     event_bus.subscribe("booking.created", log_booking_created)
     event_bus.subscribe("booking.created", invalidate_availability_cache)
+    event_bus.subscribe("booking.created", on_booking_created)
 
     event_bus.subscribe("booking.cancelled", log_booking_cancelled)
     event_bus.subscribe("booking.cancelled", invalidate_availability_cache)
-    event_bus.subscribe("booking.cancelled", notify_booking_cancelled)
+    event_bus.subscribe("booking.cancelled", on_booking_cancelled)
 
-    event_bus.subscribe("booking.confirmed", notify_booking_confirmed)
     event_bus.subscribe("booking.confirmed", invalidate_availability_cache)
+    event_bus.subscribe("booking.confirmed", on_booking_confirmed)
 
     event_bus.subscribe("booking.completed", invalidate_availability_cache)
     event_bus.subscribe("booking.no_show", invalidate_availability_cache)
 
-    # Payment events
+    # Payment events — booking.confirmed carries the user-facing email,
+    # so we don't also send a separate "payment received" note here.
     event_bus.subscribe("payment.success", log_payment_success)
+    event_bus.subscribe("payment.rejected", on_payment_rejected)
     event_bus.subscribe("payment.refunded", log_payment_refunded)
+
+    # Team events
+    event_bus.subscribe("team.member_added", on_team_member_added)
+    event_bus.subscribe("team.invitation_sent", on_team_invitation)
+
+    # Tournament events
+    event_bus.subscribe("tournament.registered", on_tournament_registered)
 
     logger.info("All event handlers registered")

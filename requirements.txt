@@ -1,0 +1,40 @@
+# Signal Shift API — runtime dependencies
+# Python 3.11+
+#
+# Install:
+#   python3.11 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -U pip
+#   pip install -r requirements.txt
+
+# ─── Web framework ───
+fastapi[standard]>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
+python-multipart>=0.0.9
+
+# ─── Database & ORM ───
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29.0
+alembic>=1.13.0
+
+# ─── Validation & settings ───
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+pydantic[email]>=2.7.0
+
+# ─── Cache / queue ───
+redis[hiredis]>=5.0.0
+
+# ─── Auth / security ───
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# ─── HTTP client (MSG91 + SendGrid) ───
+httpx>=0.27.0
+
+# ─── Templating (email fallback) ───
+jinja2>=3.1.0
+
+# ─── Payments ───
+razorpay>=1.4.0

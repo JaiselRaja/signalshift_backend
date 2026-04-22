@@ -11,7 +11,7 @@ from app.auth.dependencies import get_current_user, resolve_tenant
 from app.core.database import get_async_session
 from app.teams.schemas import (
     MembershipCreate, MembershipRead,
-    TeamCreate, TeamRead, TeamUpdate,
+    TeamCreate, TeamInvite, TeamInviteResult, TeamRead, TeamUpdate,
 )
 from app.teams.service import TeamService
 from app.tenants.models import Tenant
@@ -82,6 +82,18 @@ async def add_member(
 ):
     """Add a member to the team. Auth: team manager/captain."""
     return await svc.add_member(current_user, team_id, body)
+
+
+@router.post("/{team_id}/invite", response_model=TeamInviteResult, status_code=200)
+async def invite_member(
+    team_id: uuid.UUID,
+    body: TeamInvite,
+    current_user: User = Depends(get_current_user),
+    svc: TeamService = Depends(_get_service),
+):
+    """Invite by email. Adds the user if they exist, else emails a signup link.
+    Auth: team manager/captain."""
+    return await svc.invite_by_email(current_user, team_id, body)
 
 
 @router.get("/{team_id}/members", response_model=list[MembershipRead])

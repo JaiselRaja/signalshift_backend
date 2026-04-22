@@ -195,17 +195,30 @@ DEBUG=false
 API_PREFIX=/api/v1
 CORS_ORIGINS=["https://app.signalshift.in","https://admin.signalshift.in"]
 
-# MSG91
+# MSG91 (OTP only)
 MSG91_AUTH_KEY=...
 MSG91_EMAIL_DOMAIN=msg.signalshift.in
 MSG91_FROM_EMAIL=no-reply@msg.signalshift.in
 MSG91_FROM_NAME=Signal Shift
 MSG91_OTP_TEMPLATE_ID=signalshift_login_otp
 
+# SendGrid (all other transactional email)
+SENDGRID_API_KEY=SG....
+SENDGRID_FROM_EMAIL=no-reply@signalshift.in
+SENDGRID_FROM_NAME=Signal Shift
+ADMIN_NOTIFICATION_EMAIL=ops@signalshift.in   # optional; leave blank to skip admin alerts
+FRONTEND_BASE_URL=https://signalshift.in
+BRAND_SUPPORT_EMAIL=support@signalshift.in
+
 # UPI
 UPI_VPA=yourvpa@bank
 UPI_PAYEE_NAME=Signal Shift
 ```
+
+> **SendGrid sender auth.** Verify your sending domain (signalshift.in) in the
+> SendGrid dashboard before going live, otherwise every outbound message will
+> land in spam or bounce. OTP email continues to flow through MSG91; SendGrid
+> only handles booking, payment, team, and tournament notifications.
 
 Generate a strong JWT secret:
 

@@ -1,0 +1,40 @@
+[Unit]
+Description=Signal Shift API (FastAPI + gunicorn/uvicorn)
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=signalshift
+Group=signalshift
+WorkingDirectory=/opt/signal-shift/backend
+EnvironmentFile=/opt/signal-shift/backend/.env
+
+# Use the venv's python/gunicorn directly so PATH lookups don't bite us
+ExecStart=/opt/signal-shift/backend/.venv/bin/gunicorn app.main:app \
+    --workers 3 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 127.0.0.1:8000 \
+    --timeout 60 \
+    --graceful-timeout 30 \
+    --access-logfile - \
+    --error-logfile -
+
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+# Log to journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signalshift-api
+
+[Install]
+WantedBy=multi-user.target

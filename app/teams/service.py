@@ -8,11 +8,12 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.event_bus import event_bus
 from app.core.exceptions import ConflictError, NotFoundError, AuthorizationError
 from app.teams.models import Team, TeamMembership
 from app.teams.schemas import (
     MembershipCreate, MembershipRead,
-    TeamCreate, TeamRead, TeamUpdate,
+    TeamCreate, TeamInvite, TeamInviteResult, TeamRead, TeamUpdate,
 )
 from app.users.models import User
 
@@ -116,7 +117,73 @@ class TeamService:
             .where(TeamMembership.id == membership.id)
         )
         loaded = result.scalar_one()
+
+        await event_bus.emit("team.member_added", {
+            "team_id": str(team_id),
+            "new_user_id": str(data.user_id),
+            "inviter_id": str(user.id),
+        })
+
         return _to_membership_read(loaded)
+
+    async def invite_by_email(
+        self, user: User, team_id: uuid.UUID, data: TeamInvite
+    ) -> TeamInviteResult:
+        """
+        Invite someone to a team by email.
+
+        If the email matches an existing user in the same tenant, they
+        are added to the roster immediately (and emailed that they've
+        joined). Otherwise, an invitation email is sent with a signup
+        link — they'll be added when they register with that email.
+        """
+        team = await self.db.get(Team, team_id)
+        if not team:
+            raise NotFoundError("Team", str(team_id))
+        await self._require_team_manager(user.id, team_id)
+
+        email = str(data.email).lower().strip()
+
+        existing = await self.db.execute(
+            select(User).where(and_(
+                User.tenant_id == team.tenant_id,
+                func.lower(User.email) == email,
+            ))
+        )
+        matched = existing.scalar_one_or_none()
+
+        if matched:
+            # Avoid duplicate membership
+            dup = await self.db.execute(
+                select(TeamMembership).where(and_(
+                    TeamMembership.team_id == team_id,
+                    TeamMembership.user_id == matched.id,
+                    TeamMembership.is_active.is_(True),
+                ))
+            )
+            if dup.scalar_one_or_none():
+                raise ConflictError("User is already on this team")
+
+            membership = TeamMembership(
+                team_id=team_id, user_id=matched.id, role=data.role,
+            )
+            self.db.add(membership)
+            await self.db.commit()
+
+            await event_bus.emit("team.member_added", {
+                "team_id": str(team_id),
+                "new_user_id": str(matched.id),
+                "inviter_id": str(user.id),
+            })
+            return TeamInviteResult(status="added", email=matched.email, user_id=matched.id)
+
+        # Unknown email → send invitation with signup link
+        await event_bus.emit("team.invitation_sent", {
+            "team_id": str(team_id),
+            "invitee_email": email,
+            "inviter_id": str(user.id),
+        })
+        return TeamInviteResult(status="invited", email=email, user_id=None)
 
     async def list_members(self, team_id: uuid.UUID) -> list[MembershipRead]:
         result = await self.db.execute(

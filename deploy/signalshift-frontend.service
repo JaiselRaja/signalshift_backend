@@ -1,0 +1,31 @@
+[Unit]
+Description=Signal Shift Frontend (Next.js — user app)
+After=network-online.target signalshift-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=signalshift
+Group=signalshift
+WorkingDirectory=/opt/signal-shift/frontend
+EnvironmentFile=/opt/signal-shift/frontend/.env.production
+
+# Binds to localhost only — Caddy fronts it on :443
+ExecStart=/usr/bin/npm run start -- -p 3001 -H 127.0.0.1
+
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signalshift-frontend
+
+[Install]
+WantedBy=multi-user.target

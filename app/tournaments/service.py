@@ -10,6 +10,7 @@ from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.event_bus import event_bus
 from app.core.exceptions import (
     AuthorizationError, ConflictError, NotFoundError, ValidationError,
 )
@@ -205,6 +206,14 @@ class TournamentService:
         self.db.add(registration)
         await self.db.commit()
         await self.db.refresh(registration)
+
+        await event_bus.emit("tournament.registered", {
+            "tournament_id": str(tournament_id),
+            "team_id": str(team_id),
+            "captain_id": str(user.id),
+            "payment_status": registration.payment_status,
+        })
+
         return RegistrationRead.model_validate(registration)
 
     async def list_registrations(

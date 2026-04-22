@@ -1,0 +1,69 @@
+# Signal Shift — Caddy reverse proxy (auto-TLS via Let's Encrypt)
+#
+# Install on Ubuntu:
+#   sudo cp /opt/signal-shift/backend/deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# DNS: all three subdomains must point to this server's public IP
+# before first reload, otherwise ACME challenges will fail.
+
+# ─── API ─────────────────────────────────────────────
+api.signalshift.in {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/api.access.log
+    }
+}
+
+# ─── User app ────────────────────────────────────────
+app.signalshift.in {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:3001
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/app.access.log
+    }
+}
+
+# ─── Admin panel ─────────────────────────────────────
+admin.signalshift.in {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:3000
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/admin.access.log
+    }
+}
+
+# ─── Optional root redirect: signalshift.in → app.signalshift.in ──
+signalshift.in {
+    redir https://app.signalshift.in{uri} permanent
+}

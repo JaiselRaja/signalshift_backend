@@ -1,0 +1,29 @@
+[Unit]
+Description=Signal Shift Admin (Next.js — super admin panel)
+After=network-online.target signalshift-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=signalshift
+Group=signalshift
+WorkingDirectory=/opt/signal-shift/admin
+EnvironmentFile=/opt/signal-shift/admin/.env.production
+
+ExecStart=/usr/bin/npm run start -- -p 3000 -H 127.0.0.1
+
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signalshift-admin
+
+[Install]
+WantedBy=multi-user.target

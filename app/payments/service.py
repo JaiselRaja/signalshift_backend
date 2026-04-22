@@ -145,6 +145,12 @@ class PaymentService:
             "txn_id": str(txn.id),
             "booking_id": str(txn.booking_id),
         })
+        if booking and booking.status == "confirmed":
+            await event_bus.emit("booking.confirmed", {
+                "booking_id": str(booking.id),
+                "user_id": str(booking.user_id),
+                "turf_id": str(booking.turf_id),
+            })
 
         return PaymentRead.model_validate(txn)
 
@@ -195,11 +201,20 @@ class PaymentService:
             txn.gateway_response = entity
 
             booking = await self.db.get(Booking, txn.booking_id)
+            newly_confirmed = False
             if booking and booking.status == "pending":
                 booking.status = "confirmed"
                 booking.version += 1
+                newly_confirmed = True
 
             await self.db.commit()
+
+            if newly_confirmed and booking:
+                await event_bus.emit("booking.confirmed", {
+                    "booking_id": str(booking.id),
+                    "user_id": str(booking.user_id),
+                    "turf_id": str(booking.turf_id),
+                })
 
     async def initiate_refund(
         self, booking_id: uuid.UUID
@@ -401,6 +416,12 @@ class PaymentService:
             "txn_id": str(txn.id),
             "booking_id": str(txn.booking_id),
         })
+        if booking and booking.status == "confirmed":
+            await event_bus.emit("booking.confirmed", {
+                "booking_id": str(booking.id),
+                "user_id": str(booking.user_id),
+                "turf_id": str(booking.turf_id),
+            })
 
         logger.info("UPI payment verified: txn=%s by admin=%s", txn.id, admin.id)
         return PaymentRead.model_validate(txn)
@@ -424,6 +445,12 @@ class PaymentService:
         txn.reject_reason = reason.strip()
         await self.db.commit()
         await self.db.refresh(txn)
+
+        await event_bus.emit("payment.rejected", {
+            "txn_id": str(txn.id),
+            "booking_id": str(txn.booking_id),
+            "reason": reason.strip(),
+        })
 
         logger.info("UPI payment rejected: txn=%s by admin=%s reason=%s", txn.id, admin.id, reason)
         return PaymentRead.model_validate(txn)
