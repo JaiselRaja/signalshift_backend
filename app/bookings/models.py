@@ -30,6 +30,11 @@ class Booking(Base, UUIDMixin, TimestampMixin):
     team_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("teams.id")
     )
+    # Set when the booking was auto-created from a Subscription's recurring slot.
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        index=True,
+    )
 
     booking_date: Mapped[date] = mapped_column(Date, nullable=False)
     start_time: Mapped[time] = mapped_column(Time, nullable=False)

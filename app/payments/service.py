@@ -403,7 +403,10 @@ class PaymentService:
         txn.verified_by = admin.id
         txn.verified_at = datetime.now(timezone.utc)
 
-        booking = await self.db.get(Booking, txn.booking_id)
+        # txn.booking_id may be null for subscription payments
+        booking = (
+            await self.db.get(Booking, txn.booking_id) if txn.booking_id else None
+        )
         if booking and booking.status == "pending":
             BookingStateMachine.validate_transition(booking.status, "confirmed")
             booking.status = "confirmed"
@@ -414,7 +417,7 @@ class PaymentService:
 
         await event_bus.emit("payment.success", {
             "txn_id": str(txn.id),
-            "booking_id": str(txn.booking_id),
+            "booking_id": str(txn.booking_id) if txn.booking_id else None,
         })
         if booking and booking.status == "confirmed":
             await event_bus.emit("booking.confirmed", {
@@ -448,7 +451,7 @@ class PaymentService:
 
         await event_bus.emit("payment.rejected", {
             "txn_id": str(txn.id),
-            "booking_id": str(txn.booking_id),
+            "booking_id": str(txn.booking_id) if txn.booking_id else None,
             "reason": reason.strip(),
         })
 

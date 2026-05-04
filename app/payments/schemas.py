@@ -23,7 +23,8 @@ class PaymentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    booking_id: uuid.UUID
+    # Nullable because subscription payments don't tie to a single booking.
+    booking_id: uuid.UUID | None = None
     user_id: uuid.UUID
     gateway: str
     gateway_txn_id: str | None

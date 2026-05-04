@@ -76,6 +76,30 @@ async def log_payment_success(payload: dict[str, Any]) -> None:
     )
 
 
+async def activate_subscription_on_payment(payload: dict[str, Any]) -> None:
+    """If the payment is for a subscription, mark it active and create the
+    weekly recurring bookings."""
+    import uuid
+
+    from app.core.database import async_session_factory
+    from app.subscriptions.service import SubscriptionService
+
+    txn_id = payload.get("txn_id")
+    if not txn_id:
+        return
+    try:
+        pid = uuid.UUID(txn_id)
+    except (ValueError, TypeError):
+        return
+
+    async with async_session_factory() as session:
+        svc = SubscriptionService(session)
+        try:
+            await svc.activate_after_payment(pid)
+        except Exception:
+            logger.exception("Failed to activate subscription for payment %s", pid)
+
+
 async def log_payment_refunded(payload: dict[str, Any]) -> None:
     """Log refund processed."""
     logger.info(
@@ -120,6 +144,7 @@ def register_all_handlers() -> None:
     # Payment events — booking.confirmed carries the user-facing email,
     # so we don't also send a separate "payment received" note here.
     event_bus.subscribe("payment.success", log_payment_success)
+    event_bus.subscribe("payment.success", activate_subscription_on_payment)
     event_bus.subscribe("payment.rejected", on_payment_rejected)
     event_bus.subscribe("payment.refunded", log_payment_refunded)
 

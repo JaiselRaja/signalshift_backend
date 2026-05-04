@@ -31,6 +31,8 @@ from app.teams.router import router as teams_router
 from app.tournaments.router import router as tournaments_router
 from app.payments.router import router as payments_router
 from app.coupons.router import router as coupons_router
+from app.plans.router import router as plans_router
+from app.subscriptions.router import router as subscriptions_router
 
 # ─── Logging ─────────────────────────────────────────
 logging.basicConfig(
@@ -57,6 +59,8 @@ async def lifespan(app: FastAPI):
     import app.tournaments.models  # noqa: F401
     import app.payments.models  # noqa: F401
     import app.coupons.models  # noqa: F401
+    import app.plans.models  # noqa: F401
+    import app.subscriptions.models  # noqa: F401
 
     # Register event bus handlers
     from app.core.event_handlers import register_all_handlers
@@ -161,3 +165,5 @@ app.include_router(teams_router, prefix=API_PREFIX)
 app.include_router(tournaments_router, prefix=API_PREFIX)
 app.include_router(payments_router, prefix=API_PREFIX)
 app.include_router(coupons_router, prefix=API_PREFIX)
+app.include_router(plans_router, prefix=API_PREFIX)
+app.include_router(subscriptions_router, prefix=API_PREFIX)
