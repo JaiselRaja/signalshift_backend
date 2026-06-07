@@ -194,6 +194,64 @@ Hey {user_name.split()[0] if user_name else 'there'}, your booking has been canc
     return subject, _shell(subject, f"Cancelled · {turf_name}", body), text
 
 
+def booking_payment_receipt(
+    *,
+    user_name: str,
+    turf_name: str,
+    booking_date,
+    start_time,
+    end_time,
+    final_price,
+    booking_id: str,
+    payment_id: str,
+    payment_method: str,
+    paid_at,
+) -> tuple[str, str, str]:
+    """Combined booking-confirmation + payment-receipt email sent on Razorpay success."""
+    subject = f"Payment received · Booking confirmed · {turf_name}"
+    preheader = (
+        f"{_money(final_price)} · {_fmt_date(booking_date)} "
+        f"{_fmt_time(start_time)}–{_fmt_time(end_time)}"
+    )
+    site = settings.frontend_base_url.rstrip("/")
+    paid_at_str = (
+        paid_at.strftime("%d %b %Y, %I:%M %p")
+        if hasattr(paid_at, "strftime") else str(paid_at)
+    )
+    short_pay_id = f"…{payment_id[-6:]}" if payment_id else "—"
+    body = f"""
+{_headline("Booking confirmed", f"You're set, {user_name.split()[0] if user_name else 'champion'} — see you at the turf.")}
+<p style="font-size:15px;line-height:1.6;color:#404a3b;margin:0 0 20px 0;">
+Your payment is in and your slot is locked. Show this email at the gate if asked.
+</p>
+<table role="presentation" style="width:100%;border-collapse:collapse;margin:18px 0;">
+{_kv_row("Turf", turf_name)}
+{_kv_row("Date", _fmt_date(booking_date))}
+{_kv_row("Time", f"{_fmt_time(start_time)} – {_fmt_time(end_time)}")}
+{_kv_row("Amount paid", _money(final_price))}
+{_kv_row("Booking ID", booking_id[-8:])}
+</table>
+<div style="margin:24px 0 8px;padding-top:16px;border-top:1px solid #e5e7eb;">
+<p style="margin:0 0 8px;font-weight:600;color:#111827;">Payment receipt</p>
+</div>
+<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 18px;">
+{_kv_row("Method", payment_method)}
+{_kv_row("Payment reference", short_pay_id)}
+{_kv_row("Paid at", paid_at_str)}
+</table>
+{_btn("View my bookings", f"{site}/bookings")}
+"""
+    text = (
+        f"Booking confirmed — {turf_name}\n"
+        f"{_fmt_date(booking_date)} {_fmt_time(start_time)}–{_fmt_time(end_time)}\n"
+        f"Amount paid: {_money(final_price)}\n"
+        f"Payment method: {payment_method}\n"
+        f"Payment reference: {short_pay_id}\n"
+        f"Booking ID: {booking_id[-8:]}\n"
+    )
+    return subject, _shell(subject, preheader, body), text
+
+
 def payment_verified(*, user_name: str, amount, utr: str | None, booking_ref: str, turf_name: str) -> tuple[str, str, str]:
     subject = f"Payment verified · {_money(amount)}"
     site = settings.frontend_base_url.rstrip("/")
@@ -211,6 +269,53 @@ Your UPI transfer has been verified against your booking.
 """
     text = f"Payment of {_money(amount)} verified. UTR: {utr or '—'}. Booking: {booking_ref[:8]}."
     return subject, _shell(subject, "Payment verified", body), text
+
+
+def payment_failed(
+    *,
+    user_name: str,
+    turf_name: str,
+    booking_date,
+    start_time,
+    end_time,
+    amount,
+    booking_id: str,
+    reason: str,
+    retry_url: str,
+) -> tuple[str, str, str]:
+    """User-facing email when a Razorpay payment fails or can't be verified."""
+    subject = f"Payment failed · {turf_name} · Try again"
+    preheader = f"Your {_money(amount)} payment for {_fmt_date(booking_date)} didn't go through."
+    body = f"""
+{_headline("Payment didn't go through", "Don't worry — your slot is still held.")}
+<p style="font-size:15px;line-height:1.6;color:#404a3b;margin:0 0 14px 0;">Hi {user_name.split()[0] if user_name else 'there'},</p>
+<p style="font-size:15px;line-height:1.6;color:#404a3b;margin:0 0 20px 0;">
+We weren't able to confirm your payment. The most common reason: the card was declined,
+or the bank flagged the transaction. Tap below to retry.
+</p>
+<table role="presentation" style="width:100%;border-collapse:collapse;margin:18px 0;">
+{_kv_row("Turf", turf_name)}
+{_kv_row("Date", _fmt_date(booking_date))}
+{_kv_row("Time", f"{_fmt_time(start_time)} – {_fmt_time(end_time)}")}
+{_kv_row("Amount", _money(amount))}
+{_kv_row("Booking ID", booking_id[-8:])}
+{_kv_row("Reason", reason)}
+</table>
+{_btn("Retry payment", retry_url)}
+<p style="margin:18px 0 0;font-size:13px;color:#6b7280;">
+If you keep seeing this, reach out at
+<a href="mailto:signalshiftturf@gmail.com" style="color:#0a7">signalshiftturf@gmail.com</a>
+or call +91 84200 58420 and we'll sort it out.
+</p>
+"""
+    text = (
+        f"Payment failed — {turf_name}\n"
+        f"{_fmt_date(booking_date)} {_fmt_time(start_time)}–{_fmt_time(end_time)}\n"
+        f"Amount: {_money(amount)}\n"
+        f"Reason: {reason}\n"
+        f"Retry: {retry_url}\n"
+    )
+    return subject, _shell(subject, preheader, body), text
 
 
 def payment_rejected(*, user_name: str, amount, utr: str | None, booking_ref: str, turf_name: str, reason: str) -> tuple[str, str, str]:

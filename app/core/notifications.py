@@ -28,6 +28,8 @@ from app.core.email_templates import (
     booking_cancelled as tpl_booking_cancelled,
     booking_confirmed as tpl_booking_confirmed,
     booking_created as tpl_booking_created,
+    booking_payment_receipt as tpl_booking_payment_receipt,
+    payment_failed as tpl_payment_failed,
     payment_rejected as tpl_payment_rejected,
     payment_verified as tpl_payment_verified,
     team_invitation as tpl_team_invitation,
@@ -45,17 +47,59 @@ logger = logging.getLogger(__name__)
 
 # ─── Low-level helper ────────────────────────────────────
 
-async def _send(to_email: str, to_name: str, subject: str, html: str, text: str) -> None:
+async def _send(
+    to_email: str,
+    to_name: str,
+    subject: str,
+    html: str,
+    text: str,
+    bcc: list[str] | None = None,
+) -> None:
     if not to_email:
         return
     client = get_sendgrid_client()
     if not client.configured:
-        logger.info("SendGrid not configured — would have sent '%s' to %s", subject, to_email)
+        logger.info(
+            "SendGrid not configured — would have sent '%s' to %s (bcc=%s)",
+            subject, to_email, bcc or [],
+        )
         return
     await client.send(
         to_email=to_email, to_name=to_name or to_email,
-        subject=subject, html=html, text=text,
+        subject=subject, html=html, text=text, bcc=bcc,
     )
+
+
+async def _get_admin_bcc(session) -> list[str]:
+    """Return active admin recipient emails. Falls back to env var if DB is empty."""
+    from app.notifications.models import AdminNotificationRecipient
+    result = await session.execute(
+        select(AdminNotificationRecipient.email).where(
+            AdminNotificationRecipient.is_active.is_(True)
+        )
+    )
+    emails = [row[0] for row in result.all()]
+    if emails:
+        return emails
+    if settings.admin_notification_email:
+        return [settings.admin_notification_email]
+    return []
+
+
+_METHOD_LABEL = {
+    "card": "Card",
+    "upi": "UPI",
+    "netbanking": "Netbanking",
+    "wallet": "Wallet",
+    "emi": "EMI",
+    "paylater": "Pay Later",
+}
+
+
+def _humanize_method(method: str | None) -> str:
+    if not method:
+        return "Razorpay"
+    return _METHOD_LABEL.get(method.lower(), method.title())
 
 
 async def _load_booking_context(session, booking_id: str) -> tuple[Booking, Turf, User] | None:
@@ -141,6 +185,7 @@ async def on_booking_cancelled(payload: dict[str, Any]) -> None:
         booking, turf, user = ctx
         if not user or not user.email:
             return
+        bcc = await _get_admin_bcc(session)
         subject, html, text = tpl_booking_cancelled(
             user_name=user.full_name or "",
             turf_name=turf.name if turf else "your turf",
@@ -151,7 +196,7 @@ async def on_booking_cancelled(payload: dict[str, Any]) -> None:
             refund_pct=payload.get("refund_pct"),
             booking_id=str(booking.id),
         )
-        await _send(user.email, user.full_name or "", subject, html, text)
+        await _send(user.email, user.full_name or "", subject, html, text, bcc=bcc)
 
 
 # ─── Payment lifecycle ───────────────────────────────────
@@ -171,6 +216,31 @@ async def _load_payment_context(session, txn_id: str) -> tuple[PaymentTransactio
     return txn, booking, turf, user
 
 
+async def on_payment_success(payload: dict[str, Any]) -> None:
+    """Razorpay payment succeeded — send the combined booking + payment receipt email."""
+    async with async_session_factory() as session:
+        ctx = await _load_payment_context(session, payload.get("txn_id"))
+        if not ctx:
+            return
+        txn, booking, turf, user = ctx
+        if not user or not user.email:
+            return
+        bcc = await _get_admin_bcc(session)
+        subject, html, text = tpl_booking_payment_receipt(
+            user_name=user.full_name or "",
+            turf_name=turf.name if turf else "your turf",
+            booking_date=booking.booking_date,
+            start_time=booking.start_time,
+            end_time=booking.end_time,
+            final_price=booking.final_price,
+            booking_id=str(booking.id),
+            payment_id=txn.gateway_txn_id or str(txn.id),
+            payment_method=_humanize_method(txn.payment_method),
+            paid_at=txn.updated_at or txn.created_at,
+        )
+        await _send(user.email, user.full_name or "", subject, html, text, bcc=bcc)
+
+
 async def on_payment_verified(payload: dict[str, Any]) -> None:
     async with async_session_factory() as session:
         ctx = await _load_payment_context(session, payload.get("txn_id"))
@@ -187,6 +257,36 @@ async def on_payment_verified(payload: dict[str, Any]) -> None:
             turf_name=turf.name if turf else "your turf",
         )
         await _send(user.email, user.full_name or "", subject, html, text)
+
+
+async def on_payment_failed(payload: dict[str, Any]) -> None:
+    """Razorpay payment failed (gateway-confirmed) — email the user and BCC admins."""
+    async with async_session_factory() as session:
+        ctx = await _load_payment_context(session, payload.get("txn_id"))
+        if not ctx:
+            return
+        txn, booking, turf, user = ctx
+        if not user or not user.email:
+            return
+        bcc = await _get_admin_bcc(session)
+        retry_url = (
+            f"{settings.frontend_base_url.rstrip('/')}/book/{booking.turf_id}"
+            f"?date={booking.booking_date.isoformat()}"
+            f"&start={booking.start_time}"
+            f"&end={booking.end_time}"
+        )
+        subject, html, text = tpl_payment_failed(
+            user_name=user.full_name or "",
+            turf_name=turf.name if turf else "your turf",
+            booking_date=booking.booking_date,
+            start_time=booking.start_time,
+            end_time=booking.end_time,
+            amount=txn.amount,
+            booking_id=str(booking.id),
+            reason=payload.get("reason") or "Payment was not completed",
+            retry_url=retry_url,
+        )
+        await _send(user.email, user.full_name or "", subject, html, text, bcc=bcc)
 
 
 async def on_payment_rejected(payload: dict[str, Any]) -> None:

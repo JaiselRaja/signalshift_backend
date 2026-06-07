@@ -13,6 +13,15 @@ class PaymentInitiate(BaseModel):
     booking_id: uuid.UUID
 
 
+class RazorpayInitiateResponse(BaseModel):
+    payment_id: uuid.UUID
+    booking_id: uuid.UUID
+    razorpay_order_id: str
+    razorpay_key_id: str
+    amount_paise: int
+    currency: str
+
+
 class PaymentCallbackData(BaseModel):
     razorpay_payment_id: str
     razorpay_order_id: str

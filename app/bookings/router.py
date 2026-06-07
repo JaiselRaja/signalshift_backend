@@ -5,14 +5,15 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_roles
 from app.bookings.schemas import (
     BookingCancel, BookingCreate, BookingRead,
     CancellationPolicyCreate, CancellationPolicyRead,
-    PriceBreakdown, PricingRuleCreate, PricingRuleRead,
+    PriceBreakdown, PricingRuleCreate, PricingRuleRead, PricingRuleUpdate,
 )
 from app.bookings.service import BookingService
 from app.bookings.models import CancellationPolicy, PricingRule
@@ -137,6 +138,66 @@ async def create_pricing_rule(
     await db.commit()
     await db.refresh(rule)
     return PricingRuleRead.model_validate(rule)
+
+
+@router.get(
+    "/pricing-rules/{turf_id}",
+    response_model=list[PricingRuleRead],
+    tags=["Pricing"],
+)
+async def list_pricing_rules(
+    turf_id: uuid.UUID,
+    _=Depends(require_roles(UserRole.TURF_ADMIN, UserRole.SUPER_ADMIN)),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """List pricing rules for a turf. Auth: turf_admin or super_admin."""
+    result = await db.execute(
+        select(PricingRule)
+        .where(PricingRule.turf_id == turf_id)
+        .order_by(PricingRule.priority, PricingRule.name)
+    )
+    return [PricingRuleRead.model_validate(r) for r in result.scalars().all()]
+
+
+@router.patch(
+    "/pricing-rules/{rule_id}",
+    response_model=PricingRuleRead,
+    tags=["Pricing"],
+)
+async def update_pricing_rule(
+    rule_id: uuid.UUID,
+    body: PricingRuleUpdate,
+    _=Depends(require_roles(UserRole.TURF_ADMIN, UserRole.SUPER_ADMIN)),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Update a pricing rule. Auth: turf_admin or super_admin."""
+    rule = await db.get(PricingRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Pricing rule not found")
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(rule, field, value)
+    await db.commit()
+    await db.refresh(rule)
+    return PricingRuleRead.model_validate(rule)
+
+
+@router.delete(
+    "/pricing-rules/{rule_id}",
+    status_code=204,
+    tags=["Pricing"],
+)
+async def delete_pricing_rule(
+    rule_id: uuid.UUID,
+    _=Depends(require_roles(UserRole.TURF_ADMIN, UserRole.SUPER_ADMIN)),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Delete a pricing rule. Auth: turf_admin or super_admin."""
+    rule = await db.get(PricingRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Pricing rule not found")
+    await db.delete(rule)
+    await db.commit()
 
 
 # ─── Cancellation Policies ───────────────────────────

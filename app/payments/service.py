@@ -25,6 +25,7 @@ from app.payments.schemas import (
     PaymentCallbackData,
     PaymentInitiate,
     PaymentRead,
+    RazorpayInitiateResponse,
     UpiInitiateResponse,
     UpiSubmitUtr,
 )
@@ -49,13 +50,24 @@ def _get_razorpay_client() -> razorpay.Client | None:
     return None
 
 
+def _humanize_razorpay_error(entity: dict) -> str:
+    """Turn a Razorpay error entity into a user-friendly reason string."""
+    desc = entity.get("error_description") or entity.get("error_reason")
+    if desc:
+        return str(desc)
+    code = entity.get("error_code")
+    if code:
+        return f"Payment was declined (code: {code})."
+    return "Payment was declined by the gateway."
+
+
 class PaymentService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
     async def initiate_payment(
         self, user: User, data: PaymentInitiate
-    ) -> PaymentRead:
+    ) -> RazorpayInitiateResponse:
         """Create a payment record and initiate with Razorpay."""
         booking = await self.db.get(Booking, data.booking_id)
         if not booking:
@@ -73,7 +85,8 @@ class PaymentService:
                 order = rz_client.order.create({
                     "amount": amount_paise,
                     "currency": booking.currency or "INR",
-                    "receipt": f"booking_{booking.id}",
+                    # Razorpay caps receipt at 40 chars; "b_" + 36-char UUID = 38.
+                    "receipt": f"b_{booking.id}",
                     "notes": {
                         "booking_id": str(booking.id),
                         "user_id": str(user.id),
@@ -103,7 +116,14 @@ class PaymentService:
             txn.id, booking.id, booking.final_price,
         )
 
-        return PaymentRead.model_validate(txn)
+        return RazorpayInitiateResponse(
+            payment_id=txn.id,
+            booking_id=booking.id,
+            razorpay_order_id=gateway_order_id,
+            razorpay_key_id=settings.razorpay_key_id,
+            amount_paise=amount_paise,
+            currency=booking.currency or "INR",
+        )
 
     async def handle_callback(
         self, data: PaymentCallbackData
@@ -111,6 +131,20 @@ class PaymentService:
         """Process Razorpay callback after user completes payment."""
         # Verify signature
         if not self._verify_razorpay_signature(data):
+            # Look up the txn so the failure email can find its booking / user.
+            sig_result = await self.db.execute(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.gateway_order_id == data.razorpay_order_id
+                )
+            )
+            sig_txn = sig_result.scalar_one_or_none()
+            if sig_txn:
+                sig_txn.status = "failed"
+                await self.db.commit()
+                await event_bus.emit("payment.failed", {
+                    "txn_id": str(sig_txn.id),
+                    "reason": "Verification failed — please contact support if money was deducted.",
+                })
             raise PaymentError("Invalid payment signature")
 
         # Find the transaction
@@ -123,13 +157,59 @@ class PaymentService:
         if not txn:
             raise NotFoundError("Payment", data.razorpay_order_id)
 
-        # Update transaction
+        # Fetch the payment from Razorpay to authoritatively check status + get method.
+        # Razorpay's `handler` callback can fire for failed payments (especially in
+        # test mode with decline cards), so the signed callback alone isn't enough —
+        # we must verify the payment's actual server-side status before marking success.
+        rz_payment: dict | None = None
+        method: str | None = None
+        rz_status: str | None = None
+        rz_client = _get_razorpay_client()
+        if rz_client is not None:
+            try:
+                rz_payment = rz_client.payment.fetch(data.razorpay_payment_id)
+                method = rz_payment.get("method")
+                rz_status = rz_payment.get("status")
+            except Exception as exc:
+                logger.warning(
+                    "Razorpay payment.fetch failed for %s: %s — falling back to signed callback",
+                    data.razorpay_payment_id, exc,
+                )
+
+        # Decide success vs failure from authoritative Razorpay status.
+        # If we couldn't fetch (rz_status is None), trust the signed callback — better
+        # to occasionally over-confirm than block a legit user on a transient blip.
+        SUCCESS_STATUSES = {"authorized", "captured"}
+        if rz_status is not None and rz_status not in SUCCESS_STATUSES:
+            # Payment did NOT succeed despite handler firing. Mark failed + emit failure.
+            txn.gateway_txn_id = data.razorpay_payment_id
+            txn.status = "failed"
+            txn.gateway_response = rz_payment or {
+                "payment_id": data.razorpay_payment_id,
+                "order_id": data.razorpay_order_id,
+            }
+            if method:
+                txn.payment_method = method
+            await self.db.commit()
+            await event_bus.emit("payment.failed", {
+                "txn_id": str(txn.id),
+                "reason": _humanize_razorpay_error(rz_payment or {})
+                          if rz_status == "failed"
+                          else f"Payment is in '{rz_status}' state — please retry.",
+            })
+            raise PaymentError(
+                f"Payment did not succeed (status: {rz_status}). Please try again."
+            )
+
+        # Update transaction (success path)
         txn.gateway_txn_id = data.razorpay_payment_id
         txn.status = "success"
-        txn.gateway_response = {
+        txn.gateway_response = rz_payment or {
             "payment_id": data.razorpay_payment_id,
             "order_id": data.razorpay_order_id,
         }
+        if method:
+            txn.payment_method = method
 
         # Confirm the booking
         booking = await self.db.get(Booking, txn.booking_id)
@@ -199,6 +279,8 @@ class PaymentService:
             txn.status = "success"
             txn.gateway_txn_id = entity.get("id")
             txn.gateway_response = entity
+            if not txn.payment_method:
+                txn.payment_method = entity.get("method")
 
             booking = await self.db.get(Booking, txn.booking_id)
             newly_confirmed = False
@@ -292,10 +374,19 @@ class PaymentService:
             )
         )
         txn = result.scalar_one_or_none()
-        if txn:
-            txn.status = "failed"
-            txn.gateway_response = entity
-            await self.db.commit()
+        if not txn:
+            return
+
+        txn.status = "failed"
+        txn.gateway_response = entity
+        if not txn.payment_method:
+            txn.payment_method = entity.get("method")
+        await self.db.commit()
+
+        await event_bus.emit("payment.failed", {
+            "txn_id": str(txn.id),
+            "reason": _humanize_razorpay_error(entity),
+        })
 
     # ─── UPI (manual verification) ──────────────────────
 

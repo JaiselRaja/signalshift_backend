@@ -106,6 +106,19 @@ class PricingRuleRead(BaseModel):
     is_active: bool
 
 
+class PricingRuleUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    rule_type: str | None = None
+    priority: int | None = None
+    conditions: dict | None = None
+    adjustment_type: str | None = None
+    adjustment_value: Decimal | None = None
+    stackable: bool | None = None
+    valid_from: date | None = None
+    valid_until: date | None = None
+    is_active: bool | None = None
+
+
 class CancellationPolicyCreate(BaseModel):
     name: str = Field(..., max_length=100)
     rules: list[dict]

@@ -118,9 +118,10 @@ def register_all_handlers() -> None:
     # Email notifications live in app.core.notifications (SendGrid-backed).
     from app.core.notifications import (
         on_booking_cancelled,
-        on_booking_confirmed,
         on_booking_created,
+        on_payment_failed,
         on_payment_rejected,
+        on_payment_success,
         on_team_invitation,
         on_team_member_added,
         on_tournament_registered,
@@ -136,16 +137,20 @@ def register_all_handlers() -> None:
     event_bus.subscribe("booking.cancelled", on_booking_cancelled)
 
     event_bus.subscribe("booking.confirmed", invalidate_availability_cache)
-    event_bus.subscribe("booking.confirmed", on_booking_confirmed)
+    # NOTE: on_booking_confirmed is intentionally NOT subscribed.
+    # The combined booking+payment receipt is sent by on_payment_success
+    # below to avoid duplicate emails on the Razorpay success path.
+    # If a non-payment confirmation flow is added in future, resubscribe here.
 
     event_bus.subscribe("booking.completed", invalidate_availability_cache)
     event_bus.subscribe("booking.no_show", invalidate_availability_cache)
 
-    # Payment events — booking.confirmed carries the user-facing email,
-    # so we don't also send a separate "payment received" note here.
+    # Payment events
     event_bus.subscribe("payment.success", log_payment_success)
     event_bus.subscribe("payment.success", activate_subscription_on_payment)
+    event_bus.subscribe("payment.success", on_payment_success)
     event_bus.subscribe("payment.rejected", on_payment_rejected)
+    event_bus.subscribe("payment.failed", on_payment_failed)
     event_bus.subscribe("payment.refunded", log_payment_refunded)
 
     # Team events

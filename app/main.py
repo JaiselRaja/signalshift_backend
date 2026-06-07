@@ -31,6 +31,7 @@ from app.teams.router import router as teams_router
 from app.tournaments.router import router as tournaments_router
 from app.payments.router import router as payments_router
 from app.coupons.router import router as coupons_router
+from app.notifications.router import router as notifications_router
 from app.plans.router import router as plans_router
 from app.subscriptions.router import router as subscriptions_router
 
@@ -167,3 +168,4 @@ app.include_router(payments_router, prefix=API_PREFIX)
 app.include_router(coupons_router, prefix=API_PREFIX)
 app.include_router(plans_router, prefix=API_PREFIX)
 app.include_router(subscriptions_router, prefix=API_PREFIX)
+app.include_router(notifications_router, prefix=API_PREFIX)

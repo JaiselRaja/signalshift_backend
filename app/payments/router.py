@@ -20,6 +20,7 @@ from app.payments.schemas import (
     PaymentInitiate,
     PaymentRead,
     PaymentRejectRequest,
+    RazorpayInitiateResponse,
     UpiInitiateResponse,
     UpiSubmitUtr,
 )
@@ -49,7 +50,7 @@ async def list_payments(
     return [PaymentRead.model_validate(t) for t in result.scalars().all()]
 
 
-@router.post("/initiate", response_model=PaymentRead, status_code=201)
+@router.post("/initiate", response_model=RazorpayInitiateResponse, status_code=201)
 async def initiate_payment(
     body: PaymentInitiate,
     current_user: User = Depends(get_current_user),

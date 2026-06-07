@@ -50,16 +50,20 @@ class SendGridClient:
         html: str,
         text: str | None = None,
         reply_to: str | None = None,
+        bcc: list[str] | None = None,
     ) -> bool:
         """Send a transactional email. Returns True on success, False on any failure."""
         if not self.configured:
             logger.warning("SendGrid not configured — skipping send to %s", to_email)
             return False
 
+        personalization: dict = {"to": [{"email": to_email, "name": to_name or to_email}]}
+        if bcc:
+            cleaned = [e.strip() for e in bcc if e and e.strip()]
+            if cleaned:
+                personalization["bcc"] = [{"email": e} for e in cleaned]
         payload: dict = {
-            "personalizations": [
-                {"to": [{"email": to_email, "name": to_name or to_email}]}
-            ],
+            "personalizations": [personalization],
             "from": {"email": self._from_email, "name": self._from_name},
             "subject": subject,
             "content": [],
