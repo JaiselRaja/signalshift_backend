@@ -93,6 +93,10 @@ _METHOD_LABEL = {
     "wallet": "Wallet",
     "emi": "EMI",
     "paylater": "Pay Later",
+    # Manual booking methods (admin-recorded offline payments)
+    "cash": "Cash (manual)",
+    "playspots": "Playspots.in",
+    "other": "Manual",
 }
 
 

@@ -5,8 +5,9 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class BookingCreate(BaseModel):
@@ -21,6 +22,39 @@ class BookingCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_time_ordering(self) -> "BookingCreate":
+        if self.start_time >= self.end_time:
+            raise ValueError("start_time must be before end_time")
+        return self
+
+
+class ManualBookingCreate(BaseModel):
+    """Admin-created booking for offline payment (cash / direct UPI / Playspots / other)."""
+
+    # Customer
+    customer_phone: str = Field(..., min_length=8, max_length=20)
+    customer_name: str = Field(..., min_length=1, max_length=255)
+    customer_email: EmailStr  # required: users.email is NOT NULL
+
+    # Slot
+    turf_id: uuid.UUID
+    booking_date: date
+    start_time: time
+    end_time: time
+    booking_type: str = "regular"
+
+    # Pricing
+    coupon_code: str | None = None
+    price_override: Decimal | None = Field(default=None, ge=0)
+    price_override_reason: str | None = Field(default=None, max_length=500)
+
+    # Payment
+    payment_method: Literal["cash", "upi", "playspots", "other"]
+    payment_reference: str | None = Field(default=None, max_length=120)
+    admin_notes: str | None = Field(default=None, max_length=2000)
+    customer_notes: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_time_ordering(self) -> "ManualBookingCreate":
         if self.start_time >= self.end_time:
             raise ValueError("start_time must be before end_time")
         return self

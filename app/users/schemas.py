@@ -64,3 +64,13 @@ class UserSummary(BaseModel):
     full_name: str | None = None
     avatar_url: str | None = None
     role: str
+
+
+class UserLookupResponse(BaseModel):
+    """Phone-based lookup result for the admin manual-booking form."""
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    full_name: str | None
+    email: str | None
+    phone: str | None
+    prior_bookings: int

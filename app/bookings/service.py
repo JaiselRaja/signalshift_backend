@@ -20,8 +20,9 @@ from sqlalchemy.orm import selectinload
 from app.bookings.conflict_checker import ConflictChecker
 from app.bookings.models import Booking, CancellationPolicy
 from app.bookings.pricing_engine import PricingPipeline
+from app.payments.models import PaymentTransaction
 from app.bookings.schemas import (
-    BookingCancel, BookingCreate, BookingRead, PriceBreakdown,
+    BookingCancel, BookingCreate, BookingRead, ManualBookingCreate, PriceBreakdown,
 )
 from app.bookings.state_machine import BookingStateMachine
 from app.core.event_bus import event_bus
@@ -154,6 +155,203 @@ class BookingService:
         )
 
         return BookingRead.model_validate(booking)
+
+    async def create_manual_booking(
+        self,
+        admin: User,
+        body: ManualBookingCreate,
+    ) -> BookingRead:
+        """Admin creates a confirmed booking on behalf of an offline-paying customer.
+
+        Reuses the same advisory lock + conflict check + pricing engine as
+        create_booking. Skips Razorpay; inserts a gateway='manual' payment
+        transaction and emits payment.success so the receipt email fires.
+        """
+        # Validate override pairing
+        if body.price_override is not None and not (body.price_override_reason or "").strip():
+            raise ValidationError(
+                "Price override requires a reason.",
+                detail={"missing_field": "price_override_reason"},
+            )
+
+        # STEP 1: Resolve or create the customer record
+        customer = await self._find_or_create_user_by_phone(
+            tenant_id=admin.tenant_id,
+            phone=body.customer_phone,
+            name=body.customer_name,
+            email=body.customer_email,
+        )
+
+        # STEP 2: Advisory lock + conflict check (mirrors create_booking)
+        lock_key = _compute_lock_key(body.turf_id, body.booking_date)
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": lock_key},
+        )
+        conflict = await self.conflict_checker.find_conflict(
+            db=self.db,
+            turf_id=body.turf_id,
+            booking_date=body.booking_date,
+            start_time=body.start_time,
+            end_time=body.end_time,
+        )
+        if conflict:
+            raise BookingConflictError(
+                f"Slot {body.start_time}–{body.end_time} on "
+                f"{body.booking_date} is already booked"
+            )
+
+        # STEP 3: Base price
+        base_price = await self._resolve_base_price(
+            body.turf_id, body.booking_date, body.start_time, body.end_time
+        )
+
+        # STEP 3.5: Coupon (best-effort, failures don't block)
+        coupon_discount = Decimal("0")
+        if body.coupon_code:
+            try:
+                coupon_discount = await self.coupon_service.validate_and_compute_discount(
+                    tenant_id=admin.tenant_id,
+                    coupon_code=body.coupon_code,
+                    booking_amount=base_price,
+                    turf_id=body.turf_id,
+                    booking_type=body.booking_type,
+                )
+            except Exception:
+                coupon_discount = Decimal("0")
+
+        # STEP 4: Full price computation
+        price = await self.pricing.compute_full(
+            turf_id=body.turf_id,
+            booking_date=body.booking_date,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            booking_type=body.booking_type,
+            base_price=base_price,
+            coupon_discount=coupon_discount,
+        )
+        final_price = float(price.total)
+        if body.price_override is not None:
+            final_price = float(body.price_override)
+
+        # STEP 5: Insert booking directly as confirmed
+        duration = _calc_duration_mins(body.start_time, body.end_time)
+        booking = Booking(
+            tenant_id=admin.tenant_id,
+            turf_id=body.turf_id,
+            user_id=customer.id,
+            booking_date=body.booking_date,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            duration_mins=duration,
+            status="confirmed",
+            booking_type=body.booking_type,
+            base_price=float(price.base_price),
+            discount_amount=float(price.discount + price.coupon_discount),
+            tax_amount=float(price.tax),
+            final_price=final_price,
+            notes=body.customer_notes,
+            metadata_={
+                "source": "manual",
+                "created_by_admin_id": str(admin.id),
+                "admin_notes": body.admin_notes,
+                "price_override": (
+                    {"amount": str(body.price_override),
+                     "reason": body.price_override_reason}
+                    if body.price_override is not None else None
+                ),
+            },
+        )
+        self.db.add(booking)
+        await self.db.flush()
+
+        # STEP 6: Record the offline payment for traceability
+        txn = PaymentTransaction(
+            booking_id=booking.id,
+            user_id=customer.id,
+            gateway="manual",
+            gateway_txn_id=body.payment_reference,
+            amount=final_price,
+            currency=booking.currency or "INR",
+            status="success",
+            payment_method=body.payment_method,
+            gateway_response={
+                "source": "manual",
+                "recorded_by_admin_id": str(admin.id),
+                "reference": body.payment_reference,
+            },
+        )
+        self.db.add(txn)
+        await self.db.commit()
+        await self.db.refresh(booking)
+        await self.db.refresh(txn)
+
+        # Increment coupon usage if one was applied
+        if body.coupon_code and coupon_discount > 0:
+            await self.coupon_service.increment_usage(admin.tenant_id, body.coupon_code)
+            await self.db.commit()
+
+        # STEP 7: Emit events — payment.success drives the receipt email
+        # (on_payment_success template handles 'cash'/'upi'/'playspots'/'other' via
+        # _METHOD_LABEL). booking.confirmed triggers the availability cache
+        # invalidator; on_booking_confirmed is unsubscribed from email so this
+        # does NOT cause a duplicate.
+        await event_bus.emit("payment.success", {
+            "txn_id": str(txn.id),
+            "booking_id": str(booking.id),
+        })
+        await event_bus.emit("booking.confirmed", {
+            "booking_id": str(booking.id),
+            "user_id": str(customer.id),
+            "turf_id": str(booking.turf_id),
+        })
+
+        logger.info(
+            "Manual booking %s created by admin %s for user %s (method=%s, ₹%s)",
+            booking.id, admin.id, customer.id, body.payment_method, final_price,
+        )
+
+        return BookingRead.model_validate(booking)
+
+    async def _find_or_create_user_by_phone(
+        self,
+        tenant_id: uuid.UUID,
+        phone: str,
+        name: str,
+        email: str,
+    ) -> User:
+        """Find a user by phone within a tenant, or create one for the manual flow.
+
+        The created user is identical to a registered one except no login has
+        happened yet. The OTP login flow matches by phone, so they can claim
+        the account on next sign-in.
+        """
+        normalized = "".join(ch for ch in phone if ch.isdigit())
+        result = await self.db.execute(
+            select(User).where(
+                User.tenant_id == tenant_id,
+                User.phone == normalized,
+            )
+        )
+        user = result.scalar_one_or_none()
+        if user:
+            return user
+
+        user = User(
+            tenant_id=tenant_id,
+            phone=normalized,
+            full_name=name.strip(),
+            email=email.strip().lower(),
+            role="player",
+            is_active=True,
+        )
+        self.db.add(user)
+        await self.db.flush()
+        logger.info(
+            "Auto-created user %s for manual booking (phone=%s)",
+            user.id, normalized,
+        )
+        return user
 
     async def preview_price(
         self, user: User, body: BookingCreate

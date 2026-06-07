@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user, require_roles
 from app.bookings.schemas import (
     BookingCancel, BookingCreate, BookingRead,
     CancellationPolicyCreate, CancellationPolicyRead,
+    ManualBookingCreate,
     PriceBreakdown, PricingRuleCreate, PricingRuleRead, PricingRuleUpdate,
 )
 from app.bookings.service import BookingService
@@ -42,6 +43,23 @@ async def create_booking(
     Auth: any authenticated user.
     """
     return await svc.create_booking(current_user, body)
+
+
+@router.post(
+    "/manual",
+    response_model=BookingRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Bookings"],
+)
+async def create_manual_booking(
+    body: ManualBookingCreate,
+    current_user: User = Depends(require_roles(UserRole.TURF_ADMIN, UserRole.SUPER_ADMIN)),
+    svc: BookingService = Depends(_get_service),
+):
+    """Admin creates a booking on behalf of a customer who paid offline.
+    Auth: turf_admin or super_admin. Records payment_method as
+    cash/upi/playspots/other; no Razorpay involved."""
+    return await svc.create_manual_booking(current_user, body)
 
 
 @router.post("/preview-price", response_model=PriceBreakdown)
