@@ -157,6 +157,17 @@ class PaymentService:
         if not txn:
             raise NotFoundError("Payment", data.razorpay_order_id)
 
+        # If the server-to-server webhook already processed this payment (race condition:
+        # webhook lands before the client callback), there's nothing left to do — emails
+        # were already sent and the booking was already confirmed. Return the existing
+        # txn so the frontend sees success and redirects.
+        if txn.status == "success":
+            logger.info(
+                "Payment callback for txn %s: webhook already processed, returning existing state",
+                txn.id,
+            )
+            return PaymentRead.model_validate(txn)
+
         # Fetch the payment from Razorpay to authoritatively check status + get method.
         # Razorpay's `handler` callback can fire for failed payments (especially in
         # test mode with decline cards), so the signed callback alone isn't enough —
@@ -211,12 +222,16 @@ class PaymentService:
         if method:
             txn.payment_method = method
 
-        # Confirm the booking
+        # Confirm the booking — only if still pending. If it's already confirmed
+        # (e.g. a manual admin confirm, or webhook beat us in a very narrow race),
+        # skip the transition silently instead of erroring on confirmed→confirmed.
         booking = await self.db.get(Booking, txn.booking_id)
-        if booking:
+        newly_confirmed = False
+        if booking and booking.status == "pending":
             BookingStateMachine.validate_transition(booking.status, "confirmed")
             booking.status = "confirmed"
             booking.version += 1
+            newly_confirmed = True
 
         await self.db.commit()
         await self.db.refresh(txn)
@@ -225,7 +240,7 @@ class PaymentService:
             "txn_id": str(txn.id),
             "booking_id": str(txn.booking_id),
         })
-        if booking and booking.status == "confirmed":
+        if newly_confirmed and booking:
             await event_bus.emit("booking.confirmed", {
                 "booking_id": str(booking.id),
                 "user_id": str(booking.user_id),
