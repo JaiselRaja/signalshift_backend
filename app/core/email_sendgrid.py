@@ -1,9 +1,8 @@
 """
 SendGrid transactional email client.
 
-Used for all non-OTP outbound email: booking lifecycle, payment
+Used for all outbound email: login OTPs, booking lifecycle, payment
 confirmations/rejections, team invitations, tournament updates, etc.
-OTP email continues to go through MSG91.
 
 Failures are logged but never raise — transactional email should
 never block the core business flow (a booking still succeeds even

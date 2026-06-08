@@ -419,3 +419,34 @@ def admin_new_booking(*, user_name: str, user_email: str, user_phone: str | None
 """
     text = f"New booking: {user_name} ({user_email}) booked {turf_name} on {_fmt_date(booking_date)} {_fmt_time(start_time)}-{_fmt_time(end_time)}. Amount: {_money(final_price)}."
     return subject, _shell(subject, f"New booking · {turf_name}", body), text
+
+
+def otp_login(*, otp: str, recipient_email: str) -> tuple[str, str, str]:
+    """OTP email for login. Returns (subject, html, text)."""
+    subject = "Your Signal Shift sign-in code"
+    preheader = f"Your one-time code is {otp}. It expires in 5 minutes."
+    body = f"""
+{_headline("Sign-in code", "Use the code below to finish signing in.")}
+<p style="font-size:15px;line-height:1.6;color:#404a3b;margin:0 0 14px 0;">Hi there,</p>
+<p style="font-size:15px;line-height:1.6;color:#404a3b;margin:0 0 18px 0;">
+Use this one-time code to sign in to your Signal Shift account.
+</p>
+<div style="margin:24px 0 20px;text-align:center;">
+  <div style="display:inline-block;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:36px;font-weight:700;letter-spacing:8px;color:#0a7;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:18px 28px;">
+    {otp}
+  </div>
+</div>
+<p style="font-size:13px;line-height:1.6;color:#6b7280;margin:0 0 8px 0;">
+This code expires in <strong>5 minutes</strong>. If you didn't request it, you can ignore this email.
+</p>
+<p style="font-size:12px;line-height:1.5;color:#9ca3af;margin:18px 0 0 0;">
+For your security, never share this code with anyone — including someone claiming to be from Signal Shift.
+</p>
+"""
+    text = (
+        f"Your Signal Shift sign-in code: {otp}\n"
+        f"It expires in 5 minutes.\n\n"
+        f"If you didn't request this, you can ignore this email.\n"
+        f"Never share this code with anyone."
+    )
+    return subject, _shell(subject, preheader, body), text

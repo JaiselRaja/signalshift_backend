@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.schemas import TokenPair
 from app.config import settings
-from app.core.email import EmailClient
+from app.core.email_sendgrid import get_sendgrid_client
+from app.core.email_templates import otp_login as tpl_otp_login
 from app.core.exceptions import AuthenticationError, RateLimitError
 from app.core.redis import RedisCache
 from app.core.security import (
@@ -34,14 +35,13 @@ logger = logging.getLogger(__name__)
 
 
 class AuthService:
-    def __init__(self, db: AsyncSession, cache: RedisCache, email_client: EmailClient):
+    def __init__(self, db: AsyncSession, cache: RedisCache):
         self.db = db
         self.cache = cache
-        self.email_client = email_client
         self.user_service = UserService(db)
 
     async def send_otp(self, email: str, tenant_slug: str = "default") -> None:
-        """Generate OTP, store in Redis, send via MSG91 template."""
+        """Generate OTP, store in Redis, send via SendGrid."""
         # Rate limit: 3 OTP requests per email per 10 minutes
         allowed = await self.cache.check_rate_limit(
             f"otp_send:{email}", max_attempts=3, window_seconds=600
@@ -52,11 +52,20 @@ class AuthService:
         otp = generate_otp()
         await self.cache.store_otp(email, otp)
 
-        await self.email_client.send(
+        subject, html, text = tpl_otp_login(otp=otp, recipient_email=email)
+        client = get_sendgrid_client()
+        if not client.configured:
+            logger.warning(
+                "SendGrid not configured — OTP for %s logged but not delivered: %s",
+                email, otp,
+            )
+            return
+        await client.send(
             to_email=email,
             to_name=email.split("@", 1)[0],
-            template_id=settings.msg91_otp_template_id,
-            variables={"otp": otp},
+            subject=subject,
+            html=html,
+            text=text,
         )
 
     async def verify_otp_and_issue_tokens(

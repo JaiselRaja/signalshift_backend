@@ -51,12 +51,6 @@ class Settings(BaseSettings):
     # ─── Google OAuth ───
     google_client_id: str = ""
 
-    # ─── Email (MSG91 — OTP only) ───
-    msg91_auth_key: str = ""
-    msg91_email_domain: str = "msg.signalshift.in"
-    msg91_from_email: str = "no-reply@msg.signalshift.in"
-    msg91_from_name: str = "Signal Shift"
-    msg91_otp_template_id: str = ""
 
     # ─── Email (SendGrid — transactional) ───
     sendgrid_api_key: str = ""
