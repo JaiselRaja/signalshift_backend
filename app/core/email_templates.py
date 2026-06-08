@@ -49,6 +49,9 @@ def _fmt_time(t) -> str:
 def _shell(title: str, preheader: str, body_html: str) -> str:
     """Wrap body content in the standard Signal Shift email shell."""
     support = settings.brand_support_email
+    phone = settings.brand_support_phone
+    # Strip "+91 " and spaces for the tel: link; keep display format intact.
+    phone_tel = phone.replace(" ", "")
     site = settings.frontend_base_url.rstrip("/")
     return f"""<!doctype html>
 <html lang="en">
@@ -87,7 +90,8 @@ def _shell(title: str, preheader: str, body_html: str) -> str:
         <tr>
           <td style="padding:24px 32px 32px 32px;">
             <div style="border-top:1px solid #e4ead9;padding-top:20px;font-size:12px;color:#707a6a;line-height:1.6;">
-              Need help? Reply to this email or reach us at <a href="mailto:{support}" style="color:#004900;text-decoration:none;font-weight:600;">{support}</a>.
+              Need help? Reply to this email or reach us at <a href="mailto:{support}" style="color:#004900;text-decoration:none;font-weight:600;">{support}</a>
+              &nbsp;·&nbsp; <a href="tel:{phone_tel}" style="color:#004900;text-decoration:none;font-weight:600;">{phone}</a>.
               <br>
               <a href="{site}" style="color:#707a6a;text-decoration:none;">{site.replace('https://','').replace('http://','')}</a>
               &nbsp;·&nbsp; Made with <span style="color:#004900;">◆</span> in Tamil Nadu

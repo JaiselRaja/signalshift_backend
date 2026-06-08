@@ -57,8 +57,9 @@ class Settings(BaseSettings):
     sendgrid_from_email: str = "no-reply@signalshift.in"
     sendgrid_from_name: str = "Signal Shift"
     admin_notification_email: str = ""
-    frontend_base_url: str = "https://signalshift.in"
-    brand_support_email: str = "support@signalshift.in"
+    frontend_base_url: str = "https://www.signalshift.in"
+    brand_support_email: str = "info@signalshift.in"
+    brand_support_phone: str = "+91 84200 58420"
 
 
 settings = Settings()
